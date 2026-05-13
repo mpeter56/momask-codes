@@ -4,17 +4,18 @@
 
 If you find our code or paper helpful, please consider starring our repository and citing:
 ```
-@article{guo2023momask,
-      title={MoMask: Generative Masked Modeling of 3D Human Motions}, 
-      author={Chuan Guo and Yuxuan Mu and Muhammad Gohar Javed and Sen Wang and Li Cheng},
-      year={2023},
-      eprint={2312.00063},
-      archivePrefix={arXiv},
-      primaryClass={cs.CV}
+@inproceedings{guo2024momask,
+  title={Momask: Generative masked modeling of 3d human motions},
+  author={Guo, Chuan and Mu, Yuxuan and Javed, Muhammad Gohar and Wang, Sen and Cheng, Li},
+  booktitle={Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition},
+  pages={1900--1910},
+  year={2024}
 }
 ```
 
 ## :postbox: News
+📢 **2024-08-02** --- The [WebUI demo 🤗](https://huggingface.co/spaces/MeYourHint/MoMask) is now running smoothly on a CPU. No GPU is required to use MoMask.
+
 📢 **2024-02-26** --- 🔥🔥🔥 Congrats! MoMask is accepted to CVPR 2024.
 
 📢 **2024-01-12** --- Now you can use MoMask in Blender as an add-on. Thanks to [@makeinufilm](https://twitter.com/makeinufilm) for sharing the [tutorial](https://medium.com/@makeinufilm/notes-on-how-to-set-up-the-momask-environment-and-how-to-use-blenderaddon-6563f1abdbfa).
@@ -73,7 +74,7 @@ bash prepare/download_glove.sh
 To address the download error related to gdown: "Cannot retrieve the public link of the file. You may need to change the permission to 'Anyone with the link', or have had many accesses". A potential solution is to run `pip install --upgrade --no-cache-dir gdown`, as suggested on https://github.com/wkentaro/gdown/issues/43. This should help resolve the issue.
 
 #### (Optional) Download Manually
-Visit [[Google Drive]](https://drive.google.com/drive/folders/1b3GnAbERH8jAoO5mdWgZhyxHB73n23sK?usp=drive_link) to download the models and evaluators mannually.
+Visit [[Google Drive]](https://drive.google.com/drive/folders/1sHajltuE2xgHh91H9pFpMAYAkHaX9o57?usp=drive_link) to download the models and evaluators mannually.
 
 ### 3. Get Data
 
@@ -145,7 +146,7 @@ We didn't tried other retargetting tools. Welcome to comment if you find others 
 
 ### Scene
 
-We use this [scene](https://drive.google.com/file/d/1lg62nugD7RTAIz0Q_YP2iZsxpUzzOkT1/view?usp=sharing) for animation.
+We use this [scene](https://drive.google.com/file/d/16SbrnG9JsJ2w7UwCFmh10PcBdl6HxlrA/view?usp=drive_link) for animation.
 
 
 </details>
