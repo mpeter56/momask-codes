@@ -1,8 +1,13 @@
 """
 Stage 1 — Motion Spectrum Analyzer
 
-Extracts independent per-dimension semantic scores from HumanML3D motion arrays.
-Uses sigmoid-based normalization so dimensions are NOT mutually exclusive.
+Extracts independent per-dimension semantic scores from raw joint coordinates.
+
+Input format: (T, 22, 3)  — Y-up, units in meters, 20 fps.
+No dependency on HumanML3D 263-dim preprocessing.
+
+Scores are NOT softmax-normalized.  A motion can simultaneously score high on
+multiple dimensions, capturing compositional semantics.
 """
 
 from __future__ import annotations
@@ -14,21 +19,30 @@ from typing import Dict, List, Optional, Tuple
 from .dimensions import DIMENSIONS
 
 
+def _validate_joints(motion: np.ndarray, min_frames: int) -> None:
+    if motion.ndim != 3 or motion.shape[1] != 22 or motion.shape[2] != 3:
+        raise ValueError(
+            f"Expected (T, 22, 3) raw joint array, got {motion.shape}. "
+            "Each file should contain per-frame world-space joint positions."
+        )
+    if motion.shape[0] < min_frames:
+        raise ValueError(
+            f"Motion too short ({motion.shape[0]} frames < {min_frames} minimum)."
+        )
+
+
 class SpectrumAnalyzer:
     """
-    Analyzes a HumanML3D motion array and returns an independent semantic score
+    Analyses a raw joint motion array and returns an independent semantic score
     per dimension in [0, 1].
-
-    Scores are NOT softmax-normalized.  A motion can simultaneously score high on
-    walk AND dance, capturing compositional semantics.
 
     Parameters
     ----------
     dimensions : list of str, optional
         Which dimensions to analyse.  Defaults to all registered dimensions.
     calibration : dict[str, tuple[float, float]], optional
-        Per-dimension (low, high) thresholds for percentile calibration.
-        When None, raw extractor outputs are used directly.
+        Per-dimension (low, high) thresholds for linear rescaling to [0, 1].
+        When None, extractor outputs (already clipped to [0, 1]) are used as-is.
     min_frames : int
         Sequences shorter than this are rejected.
     """
@@ -54,24 +68,20 @@ class SpectrumAnalyzer:
         """
         Parameters
         ----------
-        motion : np.ndarray, shape (T, 263)
-            HumanML3D raw (un-normalized) motion features.
+        motion : np.ndarray, shape (T, 22, 3)
+            Raw world-space joint positions in meters, Y-up, at 20 fps.
 
         Returns
         -------
         dict mapping dimension name -> score in [0, 1]
         """
-        if motion.ndim != 2 or motion.shape[1] != 263:
-            raise ValueError(f"Expected (T, 263) motion, got {motion.shape}")
-        if motion.shape[0] < self.min_frames:
-            raise ValueError(f"Motion too short ({motion.shape[0]} < {self.min_frames} frames)")
+        _validate_joints(motion, self.min_frames)
 
         scores: Dict[str, float] = {}
         for dim in self.dimensions:
             extractor, _ = DIMENSIONS[dim]
             raw = extractor(motion)
             scores[dim] = self._calibrate(dim, raw)
-
         return scores
 
     def analyze_file(self, path: str | Path) -> Dict[str, float]:
@@ -138,10 +148,7 @@ class SpectrumAnalyzer:
         for f in sorted(motion_dir.glob("*.npy")):
             try:
                 motion = np.load(str(f))
-                if motion.ndim != 2 or motion.shape[1] != 263:
-                    continue
-                if motion.shape[0] < self.min_frames:
-                    continue
+                _validate_joints(motion, self.min_frames)
                 for dim in self.dimensions:
                     extractor, _ = DIMENSIONS[dim]
                     raw_scores[dim].append(extractor(motion))
