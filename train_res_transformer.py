@@ -17,7 +17,7 @@ from utils.get_opt import get_opt
 from utils.fixseed import fixseed
 from utils.paramUtil import t2m_kinematic_chain, kit_kinematic_chain
 
-from data.t2m_dataset import Text2MotionDataset
+from data.t2m_dataset_spectrum import Text2MotionDatasetSpectrum as Text2MotionDataset
 from motion_loaders.dataset_motion_loader import get_dataset_motion_loader
 from models.t2m_eval_wrapper import EvaluatorModelWrapper
 

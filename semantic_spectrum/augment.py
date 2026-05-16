@@ -31,8 +31,10 @@ from .synthesizer import SpectrumCaptionSynthesizer
 # Real HumanML3D tokens use GloVe-compatible POS tags, but the spectrum prefix
 # tokens are novel structured strings — we treat them as "OTHER".
 def _tokenize_caption(caption: str) -> str:
-    """Very light tokenizer: lowercases, splits on space, tags everything OTHER."""
-    tokens = caption.lower().replace(".", "").replace(",", "").split()
+    """Very light tokenizer: lowercases, splits on space, tags everything OTHER.
+    Only strip trailing sentence punctuation, not decimal points inside tags."""
+    text = caption.lower().rstrip(".,").replace(",", "")
+    tokens = text.split()
     return " ".join(f"{t}/OTHER" for t in tokens)
 
 
