@@ -161,10 +161,14 @@ if __name__ == '__main__':
     train_loader = DataLoader(train_dataset, batch_size=opt.batch_size, num_workers=4, shuffle=True, drop_last=True)
     val_loader = DataLoader(val_dataset, batch_size=opt.batch_size, num_workers=4, shuffle=True, drop_last=True)
 
-    eval_val_loader, _ = get_dataset_motion_loader(dataset_opt_path, 32, 'val', device=opt.device)
-
-    wrapper_opt = get_opt(dataset_opt_path, torch.device('cuda'))
-    eval_wrapper = EvaluatorModelWrapper(wrapper_opt)
+    try:
+        wrapper_opt = get_opt(dataset_opt_path, torch.device('cuda'))
+        eval_wrapper = EvaluatorModelWrapper(wrapper_opt)
+        eval_val_loader, _ = get_dataset_motion_loader(dataset_opt_path, 32, 'val', device=opt.device)
+    except FileNotFoundError:
+        print("WARNING: Evaluator checkpoint not found — FID metrics will be skipped during training.")
+        eval_wrapper = None
+        eval_val_loader = val_loader
 
     trainer = ResidualTransformerTrainer(opt, res_transformer, vq_model)
 
