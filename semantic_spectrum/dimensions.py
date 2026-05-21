@@ -1,9 +1,11 @@
 """
-Semantic dimension definitions with kinematic feature extractors.
+Kinematic feature extractors for each semantic dimension.
 
 Input: raw joint coordinates, shape (T, 22, 3) — Y-up, units in meters, 20 fps.
+No dependency on HumanML3D 263-dim preprocessing — operates directly on joint positions.
+All extractors return a float in [0, 1].
 
-HumanML3D / SMPL joint layout (22 joints):
+HumanML3D / SMPL-H joint layout (22 joints):
   0  Pelvis          1  L_Hip           2  R_Hip
   3  Spine1          4  L_Knee          5  R_Knee
   6  Spine2          7  L_Ankle         8  R_Ankle
@@ -13,8 +15,16 @@ HumanML3D / SMPL joint layout (22 joints):
  18  L_Elbow        19  R_Elbow        20  L_Wrist
  21  R_Wrist
 
-No dependency on HumanML3D 263-dim preprocessing.
-All extractors clip output to [0, 1] before returning.
+Relationship to LMA / Hamscher et al. (arXiv:2511.20469):
+  The 8 dimensions here are kinematic proxies intended to give the model a
+  tractable conditioning signal.  They do not directly replicate LMA Effort/Shape
+  qualities, but several map naturally:
+    walk/run  ↔  Weight + Time (sustained, strong locomotion effort)
+    dance     ↔  Space + Flow (indirect, free multi-limb coordination)
+    spin      ↔  Shape: Rotation
+    stand     ↔  Weight: Light / Time: Sustained (minimal effort)
+  Hamscher's 168 LMA+FFT features could serve as a quantitative bridge between
+  these kinematic scores and participant-facing LMA vocabulary in the user study.
 """
 
 import numpy as np

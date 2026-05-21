@@ -1,16 +1,23 @@
 """
-Stage 2 — Structured Semantic Caption Synthesizer
+Spectrum Caption Synthesizer
 
-Converts a spectrum score dict into a stable, structured prompt string.
+Converts a spectrum score dict into a structured prompt string for conditioning
+the MaskTransformer and ResidualTransformer.
 
-Format:
+Output format:
     [dim1:0.82][dim2:0.18][dim3:0.22] A person <verb phrase>.
 
-DESIGN INVARIANT:
-  - Dimension ordering is fixed (alphabetical within the registered list).
-  - Only dimensions with score >= threshold appear in the tag prefix.
-  - The natural language tail is minimal and deterministic for a given score signature.
-  - Small score changes produce small string changes (stable geometry for CLIP).
+The key function for the intensity-slider pipeline is synthesize_interpolated(),
+which produces a sequence of captions sweeping smoothly between two points in
+spectrum space — e.g. from a source walking motion toward a dance target.
+These captions map directly onto the intensity levels used in the user study
+(15%, 30%, 50%, 75%, 95% re-rendering intensity).
+
+DESIGN INVARIANTS:
+  - Dimension ordering is fixed (alphabetical) so token positions are stable.
+  - Only dimensions scoring >= tag_threshold appear in the prefix.
+  - Small score changes -> small string changes -> smooth shift in CLIP embedding.
+  - The natural language tail is intentionally minimal and deterministic.
 """
 
 from __future__ import annotations
@@ -105,8 +112,33 @@ class SpectrumCaptionSynthesizer:
         steps: int = 5,
     ) -> List[str]:
         """
-        Produce a sequence of captions interpolating between two score dicts.
-        Useful for generating a spectrum sweep (walk→dance).
+        Produce a sequence of captions interpolating linearly between two spectrum
+        score dicts.  This is the core function for the intensity-slider pipeline.
+
+        Parameters
+        ----------
+        scores_a : dict
+            Source spectrum scores (e.g. from a walking input video via MediaPipe).
+        scores_b : dict
+            Target spectrum scores (e.g. a full-dance point in spectrum space).
+        steps : int
+            Number of interpolation steps including both endpoints.
+            Default 5 maps onto the user study intensity levels (0%, 25%, 50%, 75%, 100%).
+            Use 7 for finer control (0%, ~17%, ~33%, 50%, ~67%, ~83%, 100%).
+
+        Returns
+        -------
+        list of str
+            Ordered captions from scores_a (step 0) to scores_b (step N-1).
+            Feed each caption to the trained MaskTransformer to generate the
+            corresponding motion at that intensity level.
+
+        Example
+        -------
+            source = analyzer.analyze(walking_motion)   # from MediaPipe input
+            target = {"dance": 0.9, "walk": 0.1, ...}  # desired end point
+            captions = synthesizer.synthesize_interpolated(source, target, steps=5)
+            # -> 5 captions, each progressively more dance-like
         """
         captions = []
         for i in range(steps):

@@ -1,13 +1,25 @@
 """
-Stage 1 — Motion Spectrum Analyzer
+Motion Spectrum Analyzer
 
 Extracts independent per-dimension semantic scores from raw joint coordinates.
 
-Input format: (T, 22, 3)  — Y-up, units in meters, 20 fps.
-No dependency on HumanML3D 263-dim preprocessing.
+Input format : (T, 22, 3) — Y-up, units in meters, 20 fps.
+Output format : dict mapping dimension name -> float in [0, 1].
 
-Scores are NOT softmax-normalized.  A motion can simultaneously score high on
-multiple dimensions, capturing compositional semantics.
+Scores are NOT softmax-normalised — a motion can score high on multiple
+dimensions simultaneously (e.g. a dance with a running base gives both
+dance and run non-zero scores).
+
+Typical usage
+-------------
+    from semantic_spectrum.analyzer import SpectrumAnalyzer
+
+    analyzer = SpectrumAnalyzer.load_calibration("semantic_spectrum_data/calibration.json")
+    scores = analyzer.analyze(motion)          # motion: np.ndarray (T, 22, 3)
+    # -> {"walk": 0.82, "dance": 0.31, "run": 0.05, ...}
+
+Pre-computed scores for the full HumanML3D training set are available in
+semantic_spectrum_data/spectrum_scores.json for browsing without re-running.
 """
 
 from __future__ import annotations
