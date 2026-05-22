@@ -91,7 +91,7 @@ class MaskTransformerTrainer:
             self.scheduler.load_state_dict(checkpoint['scheduler']) # Scheduler
         except:
             print('Resume wo optimizer')
-        return checkpoint['ep'], checkpoint['total_it']
+        return checkpoint['ep'], checkpoint.get('total_it', 0)
 
     def train(self, train_loader, val_loader, eval_val_loader, eval_wrapper, plot_eval):
         self.t2m_transformer.to(self.device)
@@ -263,7 +263,7 @@ class ResidualTransformerTrainer:
             self.scheduler.load_state_dict(checkpoint['scheduler']) # Scheduler
         except:
             print('Resume wo optimizer')
-        return checkpoint['ep'], checkpoint['total_it']
+        return checkpoint['ep'], checkpoint.get('total_it', 0)
 
     def train(self, train_loader, val_loader, eval_val_loader, eval_wrapper, plot_eval):
         self.res_transformer.to(self.device)
