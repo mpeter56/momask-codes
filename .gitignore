@@ -1,0 +1,52 @@
+﻿# ── Python ───────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+
+# ── Large model / data files ─────────────────────────────────────────────────
+checkpoints/
+humanml3d_models/
+*.tar.gz
+*.npy
+*.npz
+*.pkl
+*.pth
+*.ckpt
+
+# ── MediaPipe auto-downloaded model ──────────────────────────────────────────
+video_bridge/*.task
+
+# ── Generated outputs ────────────────────────────────────────────────────────
+editing/
+editing_combined/
+generation/
+outputs/
+blind_review/
+spectrum_viz/
+log/
+
+# ── User input folder — keep folder, ignore contents ─────────────────────────
+input_videos/*
+!input_videos/.gitkeep
+
+# ── Misc runtime files ───────────────────────────────────────────────────────
+training_logs.txt
+momask_input.npy
+momask_input.npz
+
+# ── OS and editor metadata ───────────────────────────────────────────────────
+.DS_Store
+**/.DS_Store
+.vs/
+.vscode/
+*.swp
+*.swo
+
+# ── Test cache ───────────────────────────────────────────────────────────────
+.pytest_cache/
+.coverage
+
+# ── To-be-removed folder (delete locally before final push) ──────────────────
+remove/
+
+.claude/
