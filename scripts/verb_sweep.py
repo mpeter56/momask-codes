@@ -207,13 +207,14 @@ def run_batch(jobs: list[dict], args) -> None:
     batch_script = Path(__file__).parent.parent / 'edit_t2m_batch.py'
     cmd = [
         sys.executable, str(batch_script),
-        '--jobs_file',    str(jobs_file),
-        '--gpu_id',       str(args.gpu_id),
-        '--name',         MASK_NAME,
-        '--res_name',     RES_NAME,
-        '--dataset_name', 't2m',
+        '--jobs_file',      str(jobs_file),
+        '--gpu_id',         str(args.gpu_id),
+        '--name',           MASK_NAME,
+        '--res_name',       RES_NAME,
+        '--dataset_name',   't2m',
         '--mask_edit_section', '0.0,1.0',
-    ]
+        '--render_workers', str(args.render_workers),
+    ] + (['--skip_ik'] if args.skip_ik else [])
     try:
         run_cmd(cmd)
     finally:
@@ -385,6 +386,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         '--regenerate_prompts', action='store_true',
         help='Re-generate outputs/verb_prompts.json even if it already exists.'
+    )
+    parser.add_argument(
+        '--skip_ik', action='store_true',
+        help='Skip IK BVH conversion and IK mp4 (saves ~30s per job).'
+    )
+    parser.add_argument(
+        '--render_workers', type=int, default=4,
+        help='CPU processes for parallel mp4 rendering. Default: 4.'
     )
     parser.add_argument(
         '--mediapipe_python', default=None,

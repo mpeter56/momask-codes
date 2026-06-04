@@ -25,6 +25,8 @@ Usage:
 """
 
 import argparse
+import concurrent.futures
+import glob
 import json
 import os
 import time
@@ -34,13 +36,18 @@ import numpy as np
 import torch
 
 from gen_t2m import load_res_model, load_trans_model, load_vq_model
-from options.eval_option import EvalT2MOptions
 from utils.fixseed import fixseed
 from utils.get_opt import get_opt
 from utils.motion_process import recover_from_ric
 from utils.paramUtil import t2m_kinematic_chain
 from utils.plot_script import plot_3d_motion
 from visualization.joints2bvh import Joint2BVHConvertor
+
+
+def _render_worker(args):
+    """Top-level function for ProcessPoolExecutor (must be picklable)."""
+    path, chain, joints, title, fps = args
+    plot_3d_motion(path, chain, joints, title=title, fps=fps)
 
 
 def parse_batch_args():
@@ -61,11 +68,25 @@ def parse_batch_args():
     parser.add_argument('--temperature', type=float, default=1.0)
     parser.add_argument('--topkr',      type=float, default=0.9)
     parser.add_argument('--gumbel_sample', action='store_true')
-    parser.add_argument('--force_mask', action='store_true')
+    parser.add_argument('--force_mask',    action='store_true')
+    parser.add_argument('--skip_ik',       action='store_true',
+                        help='Skip IK BVH conversion and IK mp4 (saves ~30s per job).')
+    parser.add_argument('--render_workers', type=int, default=4,
+                        help='CPU processes for parallel mp4 rendering. Default: 4.')
     return parser.parse_args()
 
 
-def run_job(job, models, opt, mean, std, converter, edit_section_str):
+def run_job(job, models, opt, mean, std, converter, edit_section_str,
+            skip_ik=False, rendered_sources=None) -> list[tuple]:
+    """Run inference for one job. Returns list of (path, chain, joints, title, fps)
+    render tasks to be executed in parallel by the caller's process pool.
+
+    rendered_sources: set of source_motion paths already rendered — skips
+    re-rendering the source video for jobs sharing the same source motion.
+    """
+    if rendered_sources is None:
+        rendered_sources = set()
+
     ext          = job['ext']
     text_prompt  = job['text_prompt']
     source_motion_path = job['source_motion']
@@ -79,101 +100,104 @@ def run_job(job, models, opt, mean, std, converter, edit_section_str):
     os.makedirs(joints_dir,    exist_ok=True)
     os.makedirs(animation_dir, exist_ok=True)
 
-    # Check already done
-    import glob
     existing = glob.glob(pjoin(animation_dir, '**', '*.mp4'), recursive=True)
     if existing:
         print(f"  Skipping {ext} (already has {len(existing)} mp4s)")
-        return
+        return []
 
-    # Load source motion
-    motion_data = np.load(source_motion_path, allow_pickle=True)
-    motion = motion_data['motion'] if isinstance(motion_data, np.lib.npyio.NpzFile) else motion_data
-    print(f"  Loaded motion shape: {motion.shape}")
-
-    m_length = len(motion)
-    motion = motion.astype(np.float32)
-    motion = (motion - mean) / std
-
-    max_motion_length = 196
-    if max_motion_length > m_length:
-        motion = np.concatenate(
-            [motion, np.zeros((max_motion_length - m_length, motion.shape[1]))], axis=0
+    # Load + normalise source motion
+    motion_data   = np.load(source_motion_path, allow_pickle=True)
+    motion        = motion_data['motion'] if isinstance(motion_data, np.lib.npyio.NpzFile) else motion_data
+    m_length      = len(motion)
+    motion        = motion.astype(np.float32)
+    motion_norm   = (motion - mean) / std
+    max_frames    = 196
+    if max_frames > m_length:
+        motion_norm = np.concatenate(
+            [motion_norm, np.zeros((max_frames - m_length, motion_norm.shape[1]))], axis=0
         )
-    motion_tensor = torch.from_numpy(motion)[None].to(opt.device)
+    motion_tensor = torch.from_numpy(motion_norm)[None].to(opt.device)
 
     captions   = [text_prompt]
-    token_lens = torch.div(
-        torch.LongTensor([m_length]), 4, rounding_mode='floor'
-    ).to(opt.device)
+    token_lens = torch.div(torch.LongTensor([m_length]), 4, rounding_mode='floor').to(opt.device)
     m_length_t = token_lens * 4
 
-    # Edit mask
-    _start_str, _end_str = edit_section_str.split(',')
-    edit_start, edit_end = float(_start_str), float(_end_str)
+    _start, _end = edit_section_str.split(',')
+    edit_start, edit_end = float(_start), float(_end)
 
     with torch.no_grad():
         tokens, _ = vq_model.encode(motion_tensor)
 
     edit_mask = torch.zeros_like(tokens[..., 0])
     seq_len   = tokens.shape[1]
-    s_idx = int(edit_start * seq_len)
-    e_idx = int(edit_end   * seq_len)
-    edit_mask[:, s_idx:e_idx] = 1
+    edit_mask[:, int(edit_start * seq_len): int(edit_end * seq_len)] = 1
     edit_mask = edit_mask.bool()
 
-    print_caption = f"{text_prompt} [{edit_start}-{edit_end}]"
+    print_caption   = f"{text_prompt} [{edit_start}-{edit_end}]"
     kinematic_chain = t2m_kinematic_chain
 
-    def inv_transform(data):
+    def inv(data):
         return data * std + mean
+
+    render_tasks = []   # collected, rendered in parallel by caller
 
     for r in range(repeat_times):
         print(f"  -->Repeat {r}")
         with torch.no_grad():
             mids = t2m_transformer.edit(
                 captions, tokens[..., 0].clone(), token_lens,
-                timesteps=opt.time_steps,
-                cond_scale=opt.cond_scale,
-                temperature=opt.temperature,
-                topk_filter_thres=opt.topkr,
-                gsample=opt.gumbel_sample,
-                force_mask=opt.force_mask,
+                timesteps=opt.time_steps, cond_scale=opt.cond_scale,
+                temperature=opt.temperature, topk_filter_thres=opt.topkr,
+                gsample=opt.gumbel_sample, force_mask=opt.force_mask,
                 edit_mask=edit_mask.clone(),
             )
-            mids = res_model.generate(mids, captions, token_lens, temperature=1, cond_scale=2)
-            pred_motions  = vq_model.forward_decoder(mids)
-            pred_motions  = pred_motions.detach().cpu().numpy()
-            source_np     = motion_tensor.detach().cpu().numpy()
-            data          = inv_transform(pred_motions)
-            source_data_t = inv_transform(source_np)
+            mids         = res_model.generate(mids, captions, token_lens, temperature=1, cond_scale=2)
+            pred_motions = vq_model.forward_decoder(mids).detach().cpu().numpy()
+            source_np    = motion_tensor.detach().cpu().numpy()
+            data         = inv(pred_motions)
+            src_data     = inv(source_np)
 
-        for k, (caption, joint_data, src) in enumerate(zip(captions, data, source_data_t)):
+        for k, (caption, joint_data, src) in enumerate(zip(captions, data, src_data)):
             print(f"  ---->Sample {k}: {caption} {m_length_t[k]}")
             anim_path  = pjoin(animation_dir, str(k))
             joint_path = pjoin(joints_dir,    str(k))
             os.makedirs(anim_path,  exist_ok=True)
             os.makedirs(joint_path, exist_ok=True)
 
-            ml = int(m_length_t[k])
-            joint_data   = joint_data[:ml]
-            joint        = recover_from_ric(torch.from_numpy(joint_data).float(), 22).numpy()
-            src          = src[:ml]
-            source_joint = recover_from_ric(torch.from_numpy(src).float(), 22).numpy()
+            ml         = int(m_length_t[k])
+            joint_data = joint_data[:ml]
+            joint      = recover_from_ric(torch.from_numpy(joint_data).float(), 22).numpy()
 
-            bvh = pjoin(anim_path, f"sample{k}_repeat{r}_len{ml}_ik.bvh")
-            _, ik_joint = converter.convert(joint, filename=bvh, iterations=100)
+            # Non-IK BVH + mp4 (always)
             bvh2 = pjoin(anim_path, f"sample{k}_repeat{r}_len{ml}.bvh")
             _, joint = converter.convert(joint, filename=bvh2, iterations=100, foot_ik=False)
+            render_tasks.append((
+                pjoin(anim_path, f"sample{k}_repeat{r}_len{ml}.mp4"),
+                kinematic_chain, joint, print_caption, 20
+            ))
+            np.save(pjoin(joint_path, f"sample{k}_repeat{r}_len{ml}.npy"), joint)
 
-            plot_3d_motion(pjoin(anim_path, f"sample{k}_repeat{r}_len{ml}_ik.mp4"),
-                           kinematic_chain, ik_joint, title=print_caption, fps=20)
-            plot_3d_motion(pjoin(anim_path, f"sample{k}_repeat{r}_len{ml}.mp4"),
-                           kinematic_chain, joint, title=print_caption, fps=20)
-            plot_3d_motion(pjoin(anim_path, f"sample{k}_source_len{ml}.mp4"),
-                           kinematic_chain, source_joint, title='None', fps=20)
-            np.save(pjoin(joint_path, f"sample{k}_repeat{r}_len{ml}.npy"),    joint)
-            np.save(pjoin(joint_path, f"sample{k}_repeat{r}_len{ml}_ik.npy"), ik_joint)
+            # IK BVH + mp4 (optional)
+            if not skip_ik:
+                bvh = pjoin(anim_path, f"sample{k}_repeat{r}_len{ml}_ik.bvh")
+                _, ik_joint = converter.convert(joint, filename=bvh, iterations=100)
+                render_tasks.append((
+                    pjoin(anim_path, f"sample{k}_repeat{r}_len{ml}_ik.mp4"),
+                    kinematic_chain, ik_joint, print_caption, 20
+                ))
+                np.save(pjoin(joint_path, f"sample{k}_repeat{r}_len{ml}_ik.npy"), ik_joint)
+
+            # Source mp4 — only once per unique source motion
+            if source_motion_path not in rendered_sources:
+                src   = src[:ml]
+                src_j = recover_from_ric(torch.from_numpy(src).float(), 22).numpy()
+                render_tasks.append((
+                    pjoin(anim_path, f"sample{k}_source_len{ml}.mp4"),
+                    kinematic_chain, src_j, 'None', 20
+                ))
+                rendered_sources.add(source_motion_path)
+
+    return render_tasks
 
 
 def main():
@@ -240,15 +264,33 @@ def main():
     converter = Joint2BVHConvertor()
     models    = (vq_model, t2m_transformer, res_model, vq_opt)
 
-    print(f"\nModels loaded. Running {len(jobs)} job(s) ...\n")
+    print(f"\nModels loaded. Running {len(jobs)} job(s) "
+          f"({'skip_ik' if args.skip_ik else 'with_ik'}, "
+          f"{args.render_workers} render workers) ...\n")
     t0 = time.time()
+
+    rendered_sources: set[str] = set()
+    all_render_tasks: list[tuple] = []
 
     for i, job in enumerate(jobs):
         print(f"\n[{i+1}/{len(jobs)}] {job['ext']}")
         print(f"  prompt: {job['text_prompt']}")
         t_job = time.time()
-        run_job(job, models, opt, mean, std, converter, args.mask_edit_section)
-        print(f"  job time: {time.time() - t_job:.1f}s")
+        tasks = run_job(
+            job, models, opt, mean, std, converter,
+            args.mask_edit_section,
+            skip_ik=args.skip_ik,
+            rendered_sources=rendered_sources,
+        )
+        all_render_tasks.extend(tasks)
+        print(f"  inference+BVH: {time.time() - t_job:.1f}s  ({len(tasks)} renders queued)")
+
+    # Render all mp4s in parallel on CPU cores
+    t_render = time.time()
+    print(f"\nRendering {len(all_render_tasks)} mp4(s) with {args.render_workers} workers ...")
+    with concurrent.futures.ProcessPoolExecutor(max_workers=args.render_workers) as pool:
+        list(pool.map(_render_worker, all_render_tasks))
+    print(f"Rendering done in {time.time() - t_render:.1f}s")
 
     total = time.time() - t0
     print(f"\nAll {len(jobs)} jobs done in {total:.1f}s  ({total/len(jobs):.1f}s/job)")
