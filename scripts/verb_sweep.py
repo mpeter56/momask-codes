@@ -61,6 +61,7 @@ import json
 import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 # ---------------------------------------------------------------------------
@@ -197,6 +198,28 @@ def run_cmd(cmd: list, **kwargs):
     subprocess.run(cmd, check=True, **kwargs)
 
 
+def run_batch(jobs: list[dict], args) -> None:
+    """Write jobs to a temp JSON and call edit_t2m_batch.py once (loads models once)."""
+    import tempfile
+    jobs_file = Path(tempfile.mktemp(suffix='_sweep_jobs.json'))
+    jobs_file.write_text(json.dumps(jobs, indent=2))
+    print(f"\n  Submitting {len(jobs)} job(s) to edit_t2m_batch.py (models load once) ...")
+    batch_script = Path(__file__).parent.parent / 'edit_t2m_batch.py'
+    cmd = [
+        sys.executable, str(batch_script),
+        '--jobs_file',    str(jobs_file),
+        '--gpu_id',       str(args.gpu_id),
+        '--name',         MASK_NAME,
+        '--res_name',     RES_NAME,
+        '--dataset_name', 't2m',
+        '--mask_edit_section', '0.0,1.0',
+    ]
+    try:
+        run_cmd(cmd)
+    finally:
+        jobs_file.unlink(missing_ok=True)
+
+
 def extract_verb(video_path: Path) -> str:
     """Extract the source verb from the video filename (first word before '_')."""
     stem = video_path.stem
@@ -245,51 +268,45 @@ def ensure_npz(video_path: Path, npz_path: Path | None, mp_python: str | None = 
 # Core sweep
 # ---------------------------------------------------------------------------
 
-def sweep(
+def collect_jobs(
     video_path: Path,
     sv: str,
     secondary_verbs: list[str],
     npz_path: Path,
-    slots: list[int],          # 0-based indices into the 10-scale table
-    strategies: list[int],     # which strategies to run
+    slots: list[int],
+    strategies: list[int],
     source_verb_mode: str,
     videos_per_section: int,
     editing_dir: Path,
-    gpu_id: int,
     prompts: dict[str, list[str]],
-):
-    """Run edit_t2m.py for every (secondary_verb, strategy, quantile) combination."""
+) -> list[dict]:
+    """Build the list of pending jobs, skipping already-completed ones."""
+    jobs = []
     for dv in secondary_verbs:
         for strategy in strategies:
             for q_idx, slot in enumerate(slots):
-                prompt = build_prompt(strategy, sv, dv, q_idx, slot, source_verb_mode, prompts)
+                prompt  = build_prompt(strategy, sv, dv, q_idx, slot, source_verb_mode, prompts)
                 folder  = f"{sv}_to_{dv}_s{strategy}_{source_verb_mode}_q{q_idx + 1:02d}of{len(slots)}"
-                # edit_t2m.py resolves: ./editing/<ext>
-                # Pass video_stem/folder so output lands in editing/<video_stem>/<folder>/
                 ext     = f"{video_path.stem}/{folder}"
                 out_dir = editing_dir / folder
+
                 if out_dir.exists():
                     mp4s = list(out_dir.rglob('*.mp4'))
                     if mp4s:
-                        print(f"  Skipping {ext} (already exists, {len(mp4s)} mp4s)")
+                        print(f"  Skipping {folder} (already has {len(mp4s)} mp4s)")
                         continue
                     else:
-                        print(f"  Re-running {ext} (folder exists but no mp4s — previous run failed)")
+                        print(f"  Queuing  {folder} (folder exists but no mp4s)")
+                else:
+                    print(f"  Queuing  {folder}")
 
-                cmd = [
-                    sys.executable, 'edit_t2m.py',
-                    '--gpu_id',          str(gpu_id),
-                    '--ext',             ext,
-                    '--name',            MASK_NAME,
-                    '--dataset_name',    't2m',
-                    '--res_name',        RES_NAME,
-                    '--text_prompt',     prompt,
-                    '--source_motion',   str(npz_path),
-                    '--mask_edit_section', '0.0,1.0',
-                    '--use_res_model',
-                    '--repeat_times',    str(videos_per_section),
-                ]
-                run_cmd(cmd)
+                jobs.append({
+                    'ext':           ext,
+                    'text_prompt':   prompt,
+                    'source_motion': str(npz_path),
+                    'repeat_times':  videos_per_section,
+                })
+    return jobs
 
 
 # ---------------------------------------------------------------------------
@@ -476,6 +493,8 @@ def main():
     print(f"  Source verb tag: {args.source_verb_mode}")
     print(f"  Per section:     {args.videos_per_section} generation(s)")
 
+    all_jobs: list[dict] = []
+
     for video_path in args.videos:
         if not video_path.exists():
             # Also look in input_videos/
@@ -496,22 +515,27 @@ def main():
 
         npz_path = ensure_npz(video_path, resolve_npz(video_path, skip_map), mp_python)
 
-        sweep(
-            video_path      = video_path,
-            sv              = sv,
-            secondary_verbs = secondary_verbs,
-            npz_path        = npz_path,
-            slots           = slots,
-            strategies      = strategies,
-            source_verb_mode= args.source_verb_mode,
+        all_jobs += collect_jobs(
+            video_path       = video_path,
+            sv               = sv,
+            secondary_verbs  = secondary_verbs,
+            npz_path         = npz_path,
+            slots            = slots,
+            strategies       = strategies,
+            source_verb_mode = args.source_verb_mode,
             videos_per_section = args.videos_per_section,
-            editing_dir     = editing_dir,
-            gpu_id          = args.gpu_id,
-            prompts         = prompts,
+            editing_dir      = editing_dir,
+            prompts          = prompts,
         )
 
+    if all_jobs:
+        print(f"\n  {len(all_jobs)} job(s) to run (models load once)")
+        run_batch(all_jobs, args)
+    else:
+        print("\n  All jobs already complete — nothing to run.")
+
     elapsed = time.time() - t_start
-    print(f"\n=== Done. Outputs in: {args.editing_dir}/ ===")
+    print(f"\n=== Done. Outputs in editing/<video_stem>/ ===")
     print(f"    Total time: {_fmt_time(elapsed)}")
 
 
