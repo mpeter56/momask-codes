@@ -58,6 +58,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -213,7 +214,7 @@ def run_batch(jobs: list[dict], args) -> None:
         '--res_name',       RES_NAME,
         '--dataset_name',   't2m',
         '--mask_edit_section', '0.0,1.0',
-        '--render_workers', str(args.render_workers),
+        '--render_workers', '1' if args.no_parallel else str(args.render_workers),
     ] + (['--skip_ik'] if args.skip_ik else [])
     try:
         run_cmd(cmd)
@@ -321,9 +322,14 @@ def parse_args() -> argparse.Namespace:
 
     # Input videos
     parser.add_argument(
-        '--videos', nargs='+', required=True, type=Path,
+        '--videos', nargs='+', default=None, type=Path,
         help='1-8 source videos. Each must be named <verb>_<anything>.mp4. '
              'The leading verb is extracted automatically.'
+    )
+    parser.add_argument(
+        '--videos_dir', type=Path, default=None,
+        help='Folder of videos to process. All .mp4/.mov/.avi files whose names '
+             'start with a known verb are included. Use instead of --videos.'
     )
     parser.add_argument(
         '--skip_mediapipe', nargs='*', type=Path, default=None,
@@ -396,6 +402,10 @@ def parse_args() -> argparse.Namespace:
         help='CPU processes for parallel mp4 rendering. Default: 4.'
     )
     parser.add_argument(
+        '--no_parallel', action='store_true',
+        help='Disable parallel rendering (sets render_workers=1). Use if you get CUDA/memory errors.'
+    )
+    parser.add_argument(
         '--mediapipe_python', default=None,
         help='Python executable for the MediaPipe stage (needs NumPy>=2 + mediapipe). '
              'The main env stays on NumPy<2 for torch. '
@@ -453,10 +463,7 @@ def resolve_secondary_verbs(arg: str, source_verb: str) -> list[str]:
     if arg not in VERBS:
         raise ValueError(f'--secondary_verb must be one of {VERBS} or "all", got "{arg}".')
     if arg == source_verb:
-        raise ValueError(
-            f'--secondary_verb "{arg}" is the same as the source verb extracted '
-            f'from the video filename. Choose a different verb.'
-        )
+        return []   # caller skips this video
     return [arg]
 
 
@@ -483,8 +490,23 @@ def main():
     t_start = time.time()
     _fmt_time = lambda s: f"{int(s//3600):02d}h {int((s%3600)//60):02d}m {int(s%60):02d}s"
 
-    if len(args.videos) > 8:
-        print('ERROR: at most 8 source videos are supported.')
+    # Resolve video list from --videos or --videos_dir
+    if args.videos_dir is not None:
+        if not args.videos_dir.is_dir():
+            print(f'ERROR: --videos_dir "{args.videos_dir}" is not a directory.')
+            sys.exit(1)
+        candidates = sorted(
+            p for p in args.videos_dir.iterdir()
+            if p.suffix.lower() in ('.mp4', '.mov', '.avi')
+            and p.stem.split('_')[0].lower() in VERBS
+        )
+        if not candidates:
+            print(f'ERROR: no verb-named videos found in {args.videos_dir}/')
+            sys.exit(1)
+        args.videos = candidates
+        print(f'  Found {len(args.videos)} video(s) in {args.videos_dir}/')
+    elif args.videos is None:
+        print('ERROR: provide --videos or --videos_dir.')
         sys.exit(1)
 
     # Validate and load
@@ -516,6 +538,10 @@ def main():
 
         sv = extract_verb(video_path)
         secondary_verbs = resolve_secondary_verbs(args.secondary_verb, sv)
+        if not secondary_verbs:
+            print(f"\n--- {video_path.name}  (source verb: {sv}) ---")
+            print(f"    Skipping — source verb and secondary verb are both '{sv}'.")
+            continue
         editing_dir = (args.editing_dir or Path('editing')) / video_path.stem
 
         print(f"\n--- {video_path.name}  (source verb: {sv}) ---")

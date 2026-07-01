@@ -26,13 +26,14 @@ from pathlib import Path
 
 import cv2
 
-VERBS          = ['walk', 'dance', 'run', 'jump', 'spin', 'kick', 'wave', 'stand']
-FRAME_WIDTH    = 1280
-FRAME_HEIGHT   = 720
-FPS            = 30
-INPUT_DIR      = Path('input_videos')
-ARCHIVE_DIR    = Path('recordings')
-SECONDARY_VERB = 'dance'
+VERBS           = ['walk', 'dance', 'run', 'jump', 'spin', 'kick', 'wave', 'stand']
+FRAME_WIDTH     = 1280
+FRAME_HEIGHT    = 720
+FPS             = 30
+RECORD_SECONDS  = 10
+INPUT_DIR       = Path('input_videos')
+ARCHIVE_DIR     = Path('recordings')
+SECONDARY_VERB  = 'dance'
 
 
 # ---------------------------------------------------------------------------
@@ -130,16 +131,25 @@ class CameraRecorder(threading.Thread):
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, FRAME_HEIGHT)
         cap.set(cv2.CAP_PROP_FPS, FPS)
 
-        w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-        h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        print(f"[{self.label}] Opened at {w}x{h}")
+        w        = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        h        = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        # Use the FPS the camera actually reports after configuration
+        actual_fps = cap.get(cv2.CAP_PROP_FPS)
+        if actual_fps <= 0 or actual_fps > 120:
+            actual_fps = FPS
+        print(f"[{self.label}] Opened at {w}x{h} @ {actual_fps:.1f}fps")
 
         self.output_path.parent.mkdir(parents=True, exist_ok=True)
         writer = cv2.VideoWriter(
             str(self.output_path),
             cv2.VideoWriter_fourcc(*'mp4v'),
-            FPS, (w, h)
+            actual_fps, (w, h)
         )
+
+        # Warm up: read and discard a few frames so the camera auto-exposure settles
+        # and any residual terminal keypresses are flushed before we start listening
+        for _ in range(10):
+            cap.read()
 
         t_start = time.time()
         win = f"{self.label} (q to stop)"
@@ -232,25 +242,29 @@ def main():
         print("ERROR: Sweep camera recording failed or produced an empty file.")
         sys.exit(1)
 
-    # --- Launch verb_sweep ---
-    print(f"\n{'='*60}")
-    print(f"Launching verb_sweep: {verb} → {SECONDARY_VERB}")
-    print(f"Video: {sweep_path}")
-    print(f"{'='*60}\n")
+    # --- Launch verb_sweep (skip if source and secondary verb are the same) ---
+    if verb == SECONDARY_VERB:
+        print(f"\nSource verb and secondary verb are both '{verb}' — skipping sweep.")
+        print(f"Recording saved to: {sweep_path}")
+    else:
+        print(f"\n{'='*60}")
+        print(f"Launching verb_sweep: {verb} → {SECONDARY_VERB}")
+        print(f"Video: {sweep_path}")
+        print(f"{'='*60}\n")
 
-    cmd = [
-        sys.executable, '-u', 'scripts/verb_sweep.py',
-        '--videos',                   str(sweep_path),
-        '--secondary_verb',           SECONDARY_VERB,
-        '--num_quantiles',            '10',
-        '--quantile_prompt_strategy', '1',
-        '--source_verb_mode',         'fixed',
-        '--videos_per_section',       '1',
-        '--gpu_id',                   '0',
-    ]
+        cmd = [
+            sys.executable, '-u', 'scripts/verb_sweep.py',
+            '--videos',                   str(sweep_path),
+            '--secondary_verb',           SECONDARY_VERB,
+            '--num_quantiles',            '10',
+            '--quantile_prompt_strategy', '1',
+            '--source_verb_mode',         'fixed',
+            '--videos_per_section',       '1',
+            '--gpu_id',                   '0',
+        ]
 
-    print('$', ' '.join(cmd))
-    subprocess.run(cmd, check=True)
+        print('$', ' '.join(cmd))
+        subprocess.run(cmd, check=True)
 
 
 if __name__ == '__main__':

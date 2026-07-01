@@ -133,7 +133,7 @@ def run_job(job, models, opt, mean, std, converter, edit_section_str,
     edit_mask[:, int(edit_start * seq_len): int(edit_end * seq_len)] = 1
     edit_mask = edit_mask.bool()
 
-    print_caption   = f"{text_prompt} [{edit_start}-{edit_end}]"
+    print_caption   = ""
     kinematic_chain = t2m_kinematic_chain
 
     def inv(data):
@@ -273,6 +273,7 @@ def main():
     all_render_tasks: list[tuple] = []
 
     for i, job in enumerate(jobs):
+        torch.cuda.empty_cache()
         print(f"\n[{i+1}/{len(jobs)}] {job['ext']}")
         print(f"  prompt: {job['text_prompt']}")
         t_job = time.time()
