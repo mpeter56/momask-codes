@@ -1,0 +1,14 @@
+# Core numerical / rendering
+numpy>=1.24,<2.0
+matplotlib>=3.7
+scipy>=1.10
+
+# Pose extraction — pinned to the last release that exposes mp.solutions.pose
+mediapipe==0.10.14
+protobuf<5
+
+# Video I/O
+opencv-python>=4.8
+
+# Optional — needed only for MiniGainNet training / inference
+torch>=2.0

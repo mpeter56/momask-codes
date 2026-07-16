@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Spectrum Tour · Segmented</title>
+  <meta name="viewport" content="width=1600">
+  <style>
+    :root { --bg-0:#0a0a12; --bg-1:#14141f; --bg-2:#1c1c2b; --line:#2a2a3e;
+            --text-hi:#e8e6ff; --text-lo:#8b8aa8; --accent:#e8b880; }
+    * { box-sizing: border-box; }
+    body { background: var(--bg-0); color: var(--text-hi); margin: 0; padding: 22px 32px;
+           font-family: "Playfair Display","Iowan Old Style",Georgia,serif; }
+    header { display: flex; justify-content: space-between; align-items: baseline;
+             padding-bottom: 14px; border-bottom: 1px solid var(--line); margin-bottom: 22px; }
+    h1 { margin: 0; font-weight: 300; letter-spacing: 5px; font-size: 26px; }
+    .subtitle { color: var(--text-lo); font-size: 13px; font-style: italic; }
+
+    .top { display: grid; grid-template-columns: 420px 1fr; gap: 22px; margin-bottom: 22px; }
+    .source { background: var(--bg-1); border: 1px solid var(--line); padding: 12px; }
+    .source video { width: 100%; display: block; background: black; }
+    .source .label { font-size: 11px; letter-spacing: 3px; color: var(--text-lo);
+                     text-transform: uppercase; margin-top: 8px; }
+
+    .controls { background: var(--bg-1); border: 1px solid var(--line); padding: 18px 22px;
+                display: flex; flex-direction: column; gap: 14px; }
+    .controls .row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .controls button { background: var(--bg-2); color: var(--text-hi); border: 1px solid var(--line);
+                       padding: 8px 16px; font-family: inherit; font-size: 13px; cursor: pointer;
+                       border-radius: 3px; }
+    .controls button.primary { background: var(--accent); color: #2a1a08; border-color: var(--accent); }
+    .controls label { font-size: 11px; letter-spacing: 2px; color: var(--text-lo); }
+    .controls input[type=range] { accent-color: var(--accent); width: 200px; }
+    .controls .status { font-size: 11px; color: var(--text-lo); letter-spacing: 2px; }
+
+    .grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 14px; }
+    .panel { background: var(--bg-1); border: 1px solid var(--line); padding: 10px; }
+    .panel video { width: 100%; height: auto; background: #05050a; display: block;
+                   border: 1px solid var(--line); }
+    .panel .plabel { display: flex; justify-content: space-between; align-items: baseline;
+                     padding: 8px 4px 0 4px; }
+    .panel .plabel .d-value { font-size: 15px; color: var(--accent); letter-spacing: 2px; }
+    .panel .plabel .descriptor { font-size: 10px; color: var(--text-lo); font-style: italic; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>S P E C T R U M &nbsp; T O U R &nbsp; · &nbsp; S E G M E N T E D</h1>
+    <div class="subtitle">raw webcam recording + 10 spectrum-level segments of the tour</div>
+  </header>
+
+  <div class="top">
+    <div class="source">
+      <video id="src" src="webcam.mp4" muted playsinline loop controls></video>
+      <div class="label">SOURCE WEBCAM (raw recording)</div>
+    </div>
+    <div class="controls">
+      <div class="row">
+        <button class="primary" onclick="playAll()">▶ Play all</button>
+        <button onclick="pauseAll()">⏸ Pause</button>
+        <button onclick="restartAll()">↺ Restart</button>
+      </div>
+      <div class="row">
+        <label>SPEED <span id="speed-val">1x</span></label>
+        <input type="range" min="0.25" max="2" step="0.25" value="1" oninput="setRate(parseFloat(this.value))">
+      </div>
+      <div class="row">
+        <label>MASTER TIMELINE</label>
+        <input id="master-scrub" type="range" min="0" max="1" step="0.001" value="0" oninput="scrubAll(parseFloat(this.value))">
+      </div>
+      <div class="row status" id="time-display">0.00s / 0.00s</div>
+      <div class="row status">
+        each panel below is one 9.8-second segment cut out of spectrum_tour_1280x720.mp4.<br>
+        left = raw source, panels = polished tour at that spectrum level.
+      </div>
+    </div>
+  </div>
+
+  <div class="grid">
+    <div class="panel"><video muted playsinline src="segment_d0.09.mp4"></video>
+      <div class="plabel"><span class="d-value">d = 0.09</span><span class="descriptor">identity preserved</span></div></div>
+    <div class="panel"><video muted playsinline src="segment_d0.11.mp4"></video>
+      <div class="plabel"><span class="d-value">d = 0.11</span><span class="descriptor">identity preserved</span></div></div>
+    <div class="panel"><video muted playsinline src="segment_d0.28.mp4"></video>
+      <div class="plabel"><span class="d-value">d = 0.28</span><span class="descriptor">gentle deviation</span></div></div>
+    <div class="panel"><video muted playsinline src="segment_d0.39.mp4"></video>
+      <div class="plabel"><span class="d-value">d = 0.39</span><span class="descriptor">mild transformation</span></div></div>
+    <div class="panel"><video muted playsinline src="segment_d0.40.mp4"></video>
+      <div class="plabel"><span class="d-value">d = 0.40</span><span class="descriptor">mild transformation</span></div></div>
+    <div class="panel"><video muted playsinline src="segment_d0.51.mp4"></video>
+      <div class="plabel"><span class="d-value">d = 0.51</span><span class="descriptor">mid transformation</span></div></div>
+    <div class="panel"><video muted playsinline src="segment_d0.63.mp4"></video>
+      <div class="plabel"><span class="d-value">d = 0.63</span><span class="descriptor">moderate dance</span></div></div>
+    <div class="panel"><video muted playsinline src="segment_d0.74.mp4"></video>
+      <div class="plabel"><span class="d-value">d = 0.74</span><span class="descriptor">moderate dance</span></div></div>
+    <div class="panel"><video muted playsinline src="segment_d0.80.mp4"></video>
+      <div class="plabel"><span class="d-value">d = 0.80</span><span class="descriptor">strong dance</span></div></div>
+    <div class="panel"><video muted playsinline src="segment_d1.00.mp4"></video>
+      <div class="plabel"><span class="d-value">d = 1.00</span><span class="descriptor">intensively dancing</span></div></div>
+  </div>
+
+<script>
+const videos = () => Array.from(document.querySelectorAll('video'));
+function playAll()   { videos().forEach(v => v.play().catch(()=>{})); }
+function pauseAll()  { videos().forEach(v => v.pause()); }
+function restartAll(){ videos().forEach(v => v.currentTime = 0); playAll(); }
+function setRate(r)  { videos().forEach(v => v.playbackRate = r); document.getElementById('speed-val').textContent = r + 'x'; }
+function scrubAll(t) { videos().forEach(v => { if (!isNaN(v.duration)) v.currentTime = t * v.duration; }); }
+
+setInterval(() => {
+    const v = document.querySelectorAll('.grid video')[0];
+    if (v && v.duration) {
+        document.getElementById('master-scrub').value = v.currentTime / v.duration;
+        document.getElementById('time-display').textContent =
+            v.currentTime.toFixed(2) + 's / ' + v.duration.toFixed(2) + 's';
+    }
+}, 100);
+</script>
+</body>
+</html>

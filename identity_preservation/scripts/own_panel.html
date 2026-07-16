@@ -1,0 +1,288 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>My Unnoticed Dance</title>
+  <meta name="viewport" content="width=1600">
+  <style>
+    :root { --bg-0:#0a0a12; --bg-1:#14141f; --bg-2:#1c1c2b; --line:#2a2a3e;
+            --text-hi:#e8e6ff; --text-lo:#8b8aa8; --accent:#e8b880; --skel:#5cd6ff; }
+    * { box-sizing: border-box; }
+    body { background: var(--bg-0); color: var(--text-hi); margin: 0; padding: 20px 32px 32px;
+           font-family: "Playfair Display","Iowan Old Style",Georgia,serif; }
+    header { display: flex; justify-content: space-between; align-items: baseline;
+             border-bottom: 1px solid var(--line); padding-bottom: 14px; margin-bottom: 18px; }
+    h1 { margin: 0; font-weight: 300; letter-spacing: 5px; font-size: 26px; }
+    .subtitle { color: var(--text-lo); font-size: 13px; font-style: italic; }
+    .top-row { display: grid; grid-template-columns: 300px 1fr; gap: 24px; margin-bottom: 18px; }
+    .source-block { background: var(--bg-1); border: 1px solid var(--line); padding: 12px; }
+    .source-block video { width: 100%; display: block; background: black; }
+    .source-block .label { font-size: 11px; letter-spacing: 3px; color: var(--text-lo);
+                           text-transform: uppercase; margin-top: 8px; }
+    .controls { display: flex; align-items: center; gap: 8px; padding: 12px 16px;
+                background: var(--bg-1); border: 1px solid var(--line); }
+    .controls button { background: var(--bg-2); color: var(--text-hi); border: 1px solid var(--line);
+                       padding: 8px 16px; font-family: inherit; font-size: 13px; cursor: pointer;
+                       border-radius: 3px; }
+    .controls button.primary { background: var(--accent); color: #2a1a08; border-color: var(--accent); }
+    .controls label { font-size: 11px; letter-spacing: 2px; color: var(--text-lo); margin-left: 12px; }
+    .controls input[type=range] { accent-color: var(--accent); }
+    .panels { display: grid; grid-template-columns: repeat(5, 1fr); gap: 14px; }
+    .panel { background: var(--bg-1); border: 1px solid var(--line); padding: 10px; }
+    .panel canvas { width: 100%; height: 380px; background: #05050a; display: block; border: 1px solid var(--line); }
+    .panel .plabel { display: flex; justify-content: space-between; align-items: baseline;
+                     margin-top: 8px; padding: 0 4px; }
+    .panel .plabel .name { font-size: 13px; letter-spacing: 3px; color: var(--accent); }
+    .panel .plabel .strength { font-size: 11px; color: var(--text-lo); }
+    #status { color: var(--text-lo); font-size: 11px; margin-top: 12px; letter-spacing: 2px; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>M Y &nbsp; U N N O T I C E D &nbsp; D A N C E</h1>
+    <div class="subtitle">webcam recording · 5 subtle rules · identity preserved by construction</div>
+  </header>
+
+  <div class="top-row">
+    <div class="source-block">
+      <video id="src" src="webcam.mp4" muted playsinline loop></video>
+      <div class="label">SOURCE WEBCAM</div>
+    </div>
+    <div class="controls">
+      <button class="primary" onclick="play()">▶ Play all</button>
+      <button onclick="pause()">⏸ Pause</button>
+      <button onclick="restart()">↺ Restart</button>
+      <label>STRENGTH <span id="s-val">1.0</span></label>
+      <input type="range" min="0" max="2" step="0.1" value="1" oninput="setStrength(parseFloat(this.value))">
+      <label>BPM <span id="bpm-val">120</span></label>
+      <input type="range" min="60" max="180" step="1" value="120" oninput="setBpm(parseInt(this.value))">
+      <div id="status">loading pose_data.json …</div>
+    </div>
+  </div>
+
+  <div class="panels">
+    <div class="panel"><canvas id="c0"></canvas><div class="plabel"><span class="name">WAVE</span><span class="strength" id="s0"></span></div></div>
+    <div class="panel"><canvas id="c1"></canvas><div class="plabel"><span class="name">UPPER PULL</span><span class="strength" id="s1"></span></div></div>
+    <div class="panel"><canvas id="c2"></canvas><div class="plabel"><span class="name">CENTER RIPPLE</span><span class="strength" id="s2"></span></div></div>
+    <div class="panel"><canvas id="c3"></canvas><div class="plabel"><span class="name">GESTURE ACCENT</span><span class="strength" id="s3"></span></div></div>
+    <div class="panel"><canvas id="c4"></canvas><div class="plabel"><span class="name">RHYTHM LOCK</span><span class="strength" id="s4"></span></div></div>
+  </div>
+
+<script>
+// ============ config ============
+const RULES = ['wave', 'upperPull', 'centerRipple', 'gestureAccent', 'rhythmLock'];
+let STRENGTH = 1.0;
+let BPM = 120;
+
+// MediaPipe pose connections — subset of the standard 33-landmark skeleton
+const CONNECTIONS = [
+  // face outline
+  [0,1],[1,2],[2,3],[3,7],[0,4],[4,5],[5,6],[6,8],
+  // shoulders + arms
+  [11,12],[11,13],[13,15],[12,14],[14,16],
+  // hands
+  [15,17],[15,19],[15,21],[17,19],[16,18],[16,20],[16,22],[18,20],
+  // torso
+  [11,23],[12,24],[23,24],
+  // legs
+  [23,25],[25,27],[24,26],[26,28],
+  // feet
+  [27,29],[27,31],[29,31],[28,30],[28,32],[30,32],
+];
+
+// ============ pose data ============
+let poseData = null;
+fetch('pose_data.json').then(r => r.json()).then(d => {
+  poseData = d;
+  document.getElementById('status').textContent =
+      `pose_data.json loaded: ${d.num_frames} frames · ${(d.duration_ms/1000).toFixed(1)}s · ${d.fps.toFixed(1)} fps`;
+});
+
+// ============ helpers ============
+const smoothstep = t => t * t * (3 - 2 * t);
+
+function lerpFrame(a, b, t) {
+  if (!a.landmarks || !b.landmarks) return a;
+  return {
+    t: a.t + (b.t - a.t) * t,
+    landmarks: a.landmarks.map((lm, i) => {
+      const n = b.landmarks[i];
+      return {
+        x: lm.x + (n.x - lm.x) * t,
+        y: lm.y + (n.y - lm.y) * t,
+        z: lm.z + (n.z - lm.z) * t,
+        visibility: lm.visibility + (n.visibility - lm.visibility) * t,
+      };
+    })
+  };
+}
+
+function sampleFrameAt(timeMs) {
+  if (!poseData) return null;
+  const fs = poseData.frames;
+  if (timeMs <= fs[0].t) return fs[0];
+  if (timeMs >= fs[fs.length - 1].t) return fs[fs.length - 1];
+  for (let i = 1; i < fs.length; i++) {
+    if (timeMs <= fs[i].t) {
+      const prev = fs[i - 1], next = fs[i];
+      const local = (timeMs - prev.t) / (next.t - prev.t);
+      return lerpFrame(prev, next, local);
+    }
+  }
+  return fs[fs.length - 1];
+}
+
+function gestureAccentTime(loopTime, duration) {
+  const peak = duration * 0.5;
+  const windowSize = Math.max(240, duration * 0.32);
+  const halfWindow = windowSize * 0.5;
+  let relative = loopTime - peak;
+  if (relative > duration * 0.5) relative -= duration;
+  if (relative < -duration * 0.5) relative += duration;
+  if (Math.abs(relative) > halfWindow) return loopTime;
+  const local = (relative + halfWindow) / windowSize;
+  const eased = smoothstep(local);
+  const accented = (eased - 0.5) * windowSize;
+  return ((peak + accented) + duration) % duration;
+}
+
+function rhythmLockTime(loopTime, duration) {
+  const beatMs = 60000 / BPM;
+  const beatIndex = Math.floor(loopTime / beatMs);
+  const beatStart = beatIndex * beatMs;
+  const phase = (loopTime - beatStart) / beatMs;
+  const easedTime = beatStart + smoothstep(phase) * beatMs;
+  const nearestBeat = Math.round(loopTime / beatMs) * beatMs;
+  const beatPull = 0.32;
+  return ((easedTime * (1 - beatPull) + nearestBeat * beatPull) + duration) % duration;
+}
+
+// Straight port of the JS transformPoseForDance() from soheiw/unnoticed_dance
+function transformPose(baseLandmarks, elapsedMs, ruleKind, strength) {
+  const phase = elapsedMs / 420;
+  return baseLandmarks.map((lm, index) => {
+    if (index <= 10) return { ...lm };            // HEAD ANCHOR — face never moves
+    const isUpperBody = index >= 11 && index <= 16;
+    const isLowerBody = index >= 23;
+    let x = lm.x, y = lm.y, z = lm.z;
+
+    if (ruleKind === 'wave') {
+      const sway  = Math.sin(phase + index * 0.32) * (isUpperBody ? 0.034 : 0.022);
+      const twist = Math.cos(phase * 1.24 + index * 0.2) * (isLowerBody ? 0.018 : 0.01);
+      const lift  = Math.sin(phase * 0.72 + index * 0.14) * 0.016;
+      const off   = (index % 3 === 0 ? 0.006 : index % 3 === 1 ? -0.004 : 0.002);
+      x += (sway + off) * strength;
+      y += (twist + lift) * strength;
+      z += Math.sin(phase * 0.9 + index * 0.17) * 0.025 * strength;
+    } else if (ruleKind === 'upperPull') {
+      const shoulderPull = isUpperBody ? Math.sin(phase * 0.86 + index * 0.18) * 0.044 : 0;
+      const lowerAnchor  = isLowerBody ? Math.cos(phase * 0.62 + index * 0.25) * 0.012 : 0;
+      x += (shoulderPull + lowerAnchor) * strength;
+      y += Math.sin(phase * 1.08 + index * 0.11) * (isUpperBody ? 0.012 : 0.024) * strength;
+      if (index === 15 || index === 16) z -= 0.18 * strength;
+      if (isUpperBody) z -= Math.sin(phase * 0.7) * 0.035 * strength;
+    } else if (ruleKind === 'centerRipple') {
+      const centerPull = (0.5 - lm.x) * 0.12;
+      const ripple = Math.sin(phase * 1.35 + lm.y * 10 + index * 0.21) * 0.02;
+      x += (centerPull + ripple) * strength;
+      y += Math.cos(phase * 0.92 + index * 0.3) * 0.018 * strength;
+      z += Math.sin(phase * 1.2 + lm.x * 8) * 0.04 * strength;
+    } else if (ruleKind === 'gestureAccent') {
+      const accent = Math.sin(phase * 1.7) * 0.012;
+      const isExpressive = [13, 14, 15, 16, 27, 28].includes(index);
+      x += (isExpressive ? accent * (index % 2 === 0 ? 1 : -1) : accent * 0.25) * strength;
+      y += (isExpressive ? Math.cos(phase * 1.3 + index) * 0.018 : 0) * strength;
+      z += (isExpressive ? -0.04 : 0.01) * strength;
+    } else {  // rhythmLock
+      const beatMs = 60000 / BPM;
+      const beatPhase = (elapsedMs % beatMs) / beatMs;
+      const pulse = Math.sin(beatPhase * Math.PI);
+      const isArm = [13, 14, 15, 16].includes(index);
+      const isFoot = [27, 28, 29, 30].includes(index);
+      x += Math.sin(phase + index * 0.2) * 0.01 * strength;
+      y += (isArm ? -pulse * 0.026 : isFoot ? pulse * 0.014 : pulse * 0.006) * strength;
+      z += (isArm ? -pulse * 0.035 : 0) * strength;
+    }
+    return { x: Math.min(1, Math.max(0, x)), y: Math.min(1, Math.max(0, y)), z, visibility: lm.visibility };
+  });
+}
+
+// ============ drawing ============
+function drawSkeleton(ctx, landmarks) {
+  const w = ctx.canvas.width, h = ctx.canvas.height;
+  ctx.fillStyle = '#05050a';
+  ctx.fillRect(0, 0, w, h);
+  if (!landmarks) return;
+
+  ctx.strokeStyle = '#5cd6ff';
+  ctx.lineWidth = 2.2;
+  ctx.lineCap = 'round';
+  for (const [a, b] of CONNECTIONS) {
+    const la = landmarks[a], lb = landmarks[b];
+    if (!la || !lb) continue;
+    if (la.visibility < 0.3 || lb.visibility < 0.3) continue;
+    ctx.beginPath();
+    ctx.moveTo(la.x * w, la.y * h);
+    ctx.lineTo(lb.x * w, lb.y * h);
+    ctx.stroke();
+  }
+  ctx.fillStyle = '#e8b880';
+  for (const lm of landmarks) {
+    if (lm.visibility < 0.3) continue;
+    ctx.beginPath();
+    ctx.arc(lm.x * w, lm.y * h, 3, 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+
+// ============ render loop ============
+const canvases = RULES.map((_, i) => document.getElementById('c' + i));
+canvases.forEach(c => { c.width = c.clientWidth; c.height = c.clientHeight; });
+
+function computeShiftedTime(ruleKind, elapsedMs, duration) {
+  let animatedShift = 0;
+  if (ruleKind === 'wave')         animatedShift = Math.sin(elapsedMs / 500) * 10 + Math.cos(elapsedMs / 700) * 8;
+  else if (ruleKind === 'upperPull')    animatedShift = Math.sin(elapsedMs / 680) * 18;
+  else if (ruleKind === 'centerRipple') animatedShift = Math.sin(elapsedMs / 360) * 32;
+  else if (ruleKind === 'floatDrift')   animatedShift = Math.cos(elapsedMs / 820) * 24;
+
+  let shifted = ((elapsedMs + animatedShift * STRENGTH) + duration) % duration;
+  if (ruleKind === 'gestureAccent') shifted = gestureAccentTime(shifted, duration);
+  else if (ruleKind === 'rhythmLock')    shifted = rhythmLockTime(shifted, duration);
+  return shifted;
+}
+
+function render() {
+  if (poseData) {
+    const video = document.getElementById('src');
+    const duration = poseData.duration_ms;
+    const elapsedMs = (video.currentTime * 1000) % duration;
+
+    RULES.forEach((rk, i) => {
+      const shifted = computeShiftedTime(rk, elapsedMs, duration);
+      const frame = sampleFrameAt(shifted);
+      if (!frame || !frame.landmarks) return;
+      const landmarks = transformPose(frame.landmarks, elapsedMs, rk, STRENGTH);
+      drawSkeleton(canvases[i].getContext('2d'), landmarks);
+      document.getElementById('s' + i).textContent =
+          `shift ${(shifted - elapsedMs).toFixed(0)} ms`;
+    });
+  }
+  requestAnimationFrame(render);
+}
+render();
+
+// ============ controls ============
+function play()     { document.getElementById('src').play().catch(()=>{}); }
+function pause()    { document.getElementById('src').pause(); }
+function restart()  { const v = document.getElementById('src'); v.currentTime = 0; v.play().catch(()=>{}); }
+function setStrength(s) { STRENGTH = s; document.getElementById('s-val').textContent = s.toFixed(1); }
+function setBpm(b)      { BPM = b; document.getElementById('bpm-val').textContent = b; }
+
+// Resize canvases when window changes
+window.addEventListener('resize', () => {
+  canvases.forEach(c => { c.width = c.clientWidth; c.height = c.clientHeight; });
+});
+</script>
+</body>
+</html>
