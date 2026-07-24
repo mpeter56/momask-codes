@@ -53,6 +53,9 @@ import time
 from os.path import join as pjoin
 from pathlib import Path
 
+# Ensure repo root is on sys.path when script is run from any directory
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
 import numpy as np
 import torch
 
@@ -153,7 +156,7 @@ def main():
     args = parse_args()
     fixseed(10107)
 
-    with open(args.jobs_file) as f:
+    with open(args.jobs_file, encoding='utf-8-sig') as f:
         jobs = json.load(f)
     if not jobs:
         print("No jobs to run.")
@@ -261,31 +264,29 @@ def main():
         motion_vec, orig_joints = load_source(src_path)
 
         if motion_vec is not None:
-            output_joints = pipeline.run_from_motion_vec(
-                motion_vec, orig_joints, text_prompt)
+            source_joints, momask_joints, output_joints = pipeline.run_from_motion_vec(
+                motion_vec, orig_joints, text_prompt, return_intermediates=True)
         else:
-            output_joints = pipeline.run(orig_joints, text_prompt)
+            source_joints, momask_joints, output_joints = pipeline.run(
+                orig_joints, text_prompt, return_intermediates=True)
 
         T = len(output_joints)
 
-        # Save joints
-        npy_path = pjoin(joints_dir, 'blend_output.npy')
-        np.save(npy_path, output_joints)
+        def save_variant(tag: str, joints: np.ndarray) -> None:
+            np.save(pjoin(joints_dir, f'{tag}.npy'), joints)
+            bvh = pjoin(animation_dir, f'{tag}_len{T}.bvh')
+            _, sj = converter.convert(joints, filename=bvh, iterations=100, foot_ik=False)
+            plot_3d_motion(pjoin(animation_dir, f'{tag}_len{T}.mp4'),
+                           t2m_kinematic_chain, sj, title=tag, fps=20)
+            if not args.skip_ik:
+                bvh_ik = pjoin(animation_dir, f'{tag}_len{T}_ik.bvh')
+                _, ij = converter.convert(joints, filename=bvh_ik, iterations=100, foot_ik=True)
+                plot_3d_motion(pjoin(animation_dir, f'{tag}_len{T}_ik.mp4'),
+                               t2m_kinematic_chain, ij, title=f'{tag} (IK)', fps=20)
 
-        # BVH + mp4 (non-IK)
-        bvh_path = pjoin(animation_dir, f'blend_len{T}.bvh')
-        _, smooth_joints = converter.convert(output_joints, filename=bvh_path,
-                                             iterations=100, foot_ik=False)
-        mp4_path = pjoin(animation_dir, f'blend_len{T}.mp4')
-        plot_3d_motion(mp4_path, t2m_kinematic_chain, smooth_joints,
-                       title='', fps=20)
-
-        if not args.skip_ik:
-            bvh_ik = pjoin(animation_dir, f'blend_len{T}_ik.bvh')
-            _, ik_joints = converter.convert(output_joints, filename=bvh_ik,
-                                             iterations=100, foot_ik=True)
-            plot_3d_motion(pjoin(animation_dir, f'blend_len{T}_ik.mp4'),
-                           t2m_kinematic_chain, ik_joints, title='', fps=20)
+        save_variant('source',  source_joints)
+        save_variant('momask',  momask_joints)
+        save_variant('blended', output_joints)
 
         print(f"  done in {time.time() - t_job:.1f}s → {result_dir}")
 

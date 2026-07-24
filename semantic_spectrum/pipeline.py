@@ -100,35 +100,31 @@ class ZoneBlendPipeline:
 
     def run(
         self,
-        original_joints: np.ndarray,
-        text_prompt:     str,
-    ) -> np.ndarray:
+        original_joints:    np.ndarray,
+        text_prompt:        str,
+        return_intermediates: bool = False,
+    ) -> np.ndarray | tuple[np.ndarray, np.ndarray, np.ndarray]:
         """
         Run the full five-step pipeline.
 
         Parameters
         ----------
-        original_joints : (T, 22, 3)  from MediaPipe (Step 1 — caller provides)
-        text_prompt     : spectrum-conditioned caption, e.g.
-                          '[walk:0.91][dance:0.09] A person walks.'
+        original_joints      : (T, 22, 3)  from MediaPipe (Step 1 — caller provides)
+        text_prompt          : spectrum-conditioned caption
+        return_intermediates : if True, return (original_joints, momask_joints, output_joints)
 
         Returns
         -------
-        output_joints : (T, 22, 3)
+        output_joints : (T, 22, 3)  — or tuple of three if return_intermediates=True
         """
-        # Step 2: original movement feature vectors
-        M_original = self.extractor.extract(original_joints)
-
-        # Step 3: MoMask edit → generated joints
+        M_original    = self.extractor.extract(original_joints)
         momask_joints = self._momask_edit(original_joints, text_prompt)
-
-        # Step 4: MoMask movement feature vectors
-        M_momask = self.extractor.extract(momask_joints)
-
-        # Step 5: feature-space blend + autoregressive reconstruction
+        M_momask      = self.extractor.extract(momask_joints)
         M_output      = self.blender.feature_blend(M_original, M_momask)
         output_joints = self.blender.reconstruct(M_output, original_joints)
 
+        if return_intermediates:
+            return original_joints, momask_joints, output_joints
         return output_joints
 
     # ------------------------------------------------------------------
@@ -231,23 +227,25 @@ class ZoneBlendPipeline:
 
     def run_from_motion_vec(
         self,
-        motion_vec:      np.ndarray,
-        original_joints: np.ndarray,
-        text_prompt:     str,
-    ) -> np.ndarray:
+        motion_vec:           np.ndarray,
+        original_joints:      np.ndarray,
+        text_prompt:          str,
+        return_intermediates: bool = False,
+    ) -> np.ndarray | tuple[np.ndarray, np.ndarray, np.ndarray]:
         """
         Same as run() but accepts a pre-computed (T, 263) motion vector
         for the MoMask encode step, giving highest-quality results.
 
         Parameters
         ----------
-        motion_vec      : (T, 263)  HumanML3D normalised motion vector
-        original_joints : (T, 22, 3)  used only for feature extraction seed
-        text_prompt     : spectrum caption string
+        motion_vec           : (T, 263)  HumanML3D normalised motion vector
+        original_joints      : (T, 22, 3)  used only for feature extraction seed
+        text_prompt          : spectrum caption string
+        return_intermediates : if True, return (original_joints, momask_joints, output_joints)
 
         Returns
         -------
-        output_joints : (T, 22, 3)
+        output_joints : (T, 22, 3)  — or tuple of three if return_intermediates=True
         """
         from utils.motion_process import recover_from_ric
 
@@ -293,4 +291,6 @@ class ZoneBlendPipeline:
         M_output      = self.blender.feature_blend(M_original, M_momask)
         output_joints = self.blender.reconstruct(M_output, original_joints)
 
+        if return_intermediates:
+            return original_joints, momask_joints, output_joints
         return output_joints
