@@ -5,7 +5,7 @@ ZoneFeatureExtractor applies a fixed set of kinematic feature extractors
 (velocity, acceleration, range of motion, periodicity) to the joint subset
 belonging to each zone, returning a dict of feature vectors keyed by zone name.
 
-Feature vector layout per zone (7 values):
+Feature vector layout per zone (8 values):
   [0] mean joint speed  (m/s)
   [1] std  joint speed
   [2] mean abs acceleration  (m/s^2)
@@ -13,6 +13,7 @@ Feature vector layout per zone (7 values):
   [4] dominant FFT frequency  (Hz)
   [5] FFT magnitude of dominant frequency (normalised)
   [6] mean pairwise joint distance within zone (m)
+  [7] zone centroid speed  (m/s) -- rigid-body translation speed of the zone
 """
 
 from __future__ import annotations
@@ -23,7 +24,7 @@ from numpy.fft import rfft, rfftfreq
 from semantic_spectrum.zones import ZoneConfig
 
 FPS = 20.0
-FEATURE_DIM = 7
+FEATURE_DIM = 8
 
 
 class ZoneFeatureExtractor:
@@ -73,9 +74,10 @@ class ZoneFeatureExtractor:
         rom               = self._range_of_motion(zone_joints)
         freq, freq_mag    = self._periodicity(zone_joints)
         pairwise          = self._pairwise_distance(zone_joints)
+        zone_speed        = self._zone_centroid_speed(zone_joints)
 
         return np.array([vel_mean, vel_std, acc_mean, rom,
-                         freq, freq_mag, pairwise], dtype=np.float32)
+                         freq, freq_mag, pairwise, zone_speed], dtype=np.float32)
 
     def _velocity(self, zone_joints: np.ndarray) -> tuple[float, float]:
         """Mean and std of per-joint speed across time."""
@@ -117,6 +119,12 @@ class ZoneFeatureExtractor:
         dom_freq = float(freqs[idx])
         dom_mag  = float(mags[idx] / (mags.sum() + 1e-8))
         return dom_freq, dom_mag
+
+    def _zone_centroid_speed(self, zone_joints: np.ndarray) -> float:
+        """Mean speed of the zone centroid — how fast the zone moves as a rigid unit."""
+        centroid = zone_joints.mean(axis=1)               # (T, 3)
+        vel      = np.diff(centroid, axis=0) * FPS        # (T-1, 3)
+        return float(np.mean(np.linalg.norm(vel, axis=-1)))
 
     def _pairwise_distance(self, zone_joints: np.ndarray) -> float:
         """Mean pairwise Euclidean distance between joints within the zone (averaged over time)."""

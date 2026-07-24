@@ -315,15 +315,26 @@ def main():
 
         # Ablation: one output per feature dimension
         if args.ablate:
-            from semantic_spectrum.blend import FEATURE_NAMES
-            print(f"  [ablate] running {len(FEATURE_NAMES)} single-feature passes ...")
-            for feat_idx, feat_name in enumerate(FEATURE_NAMES):
+            from semantic_spectrum.blend import (
+                FEATURE_NAMES, _IDX_FREQ, _IDX_FREQ_MAG,
+            )
+            # dom_freq and freq_mag are coupled in the blender (both must be active
+            # to produce oscillation), so they are always ablated as a pair.
+            _ABLATE_SETS = [
+                ({i}, FEATURE_NAMES[i])
+                for i in range(len(FEATURE_NAMES))
+                if i not in (_IDX_FREQ, _IDX_FREQ_MAG)
+            ] + [({_IDX_FREQ, _IDX_FREQ_MAG}, "dom_freq+freq_mag")]
+
+            print(f"  [ablate] running {len(_ABLATE_SETS)} passes ...")
+            for active_set, feat_name in _ABLATE_SETS:
                 ablation_joints = pipeline.blender.reconstruct(
-                    M_output, source_joints, active_features={feat_idx}
+                    M_output, source_joints, active_features=active_set
                 )
-                tag = f'ablate_{feat_idx:02d}_{feat_name}'
+                idx_str = "+".join(f"{i:02d}" for i in sorted(active_set))
+                tag = f'ablate_{idx_str}_{feat_name}'
                 save_variant(tag, ablation_joints)
-                print(f"    [{feat_idx}] {feat_name} done")
+                print(f"    {feat_name} done")
 
         print(f"  done in {time.time() - t_job:.1f}s → {result_dir}")
 

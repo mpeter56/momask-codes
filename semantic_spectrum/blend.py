@@ -31,13 +31,14 @@ from semantic_spectrum.zones import ZoneConfig
 FPS = 20.0
 
 # Feature vector indices (must match ZoneFeatureExtractor output order)
-_IDX_VEL_MEAN = 0
-_IDX_VEL_STD  = 1
-_IDX_ACC_MEAN = 2
-_IDX_ROM      = 3
-_IDX_FREQ     = 4
-_IDX_FREQ_MAG = 5
-_IDX_PDIST    = 6
+_IDX_VEL_MEAN  = 0
+_IDX_VEL_STD   = 1
+_IDX_ACC_MEAN  = 2
+_IDX_ROM       = 3
+_IDX_FREQ      = 4
+_IDX_FREQ_MAG  = 5
+_IDX_PDIST     = 6
+_IDX_ZONE_SPEED = 7   # centroid displacement magnitude (zone-level speed)
 
 # Human-readable names for ablation outputs
 FEATURE_NAMES = [
@@ -48,6 +49,7 @@ FEATURE_NAMES = [
     "dom_freq",
     "freq_mag",
     "pairwise_dist",
+    "zone_speed",
 ]
 
 
@@ -148,6 +150,10 @@ class FeatureBlender:
                     zone_origin=zone_origin[zone],
                     active_features=active_features,
                 )
+                # Guard against NaN/inf from chained feature scaling
+                if not np.isfinite(new_pos).all():
+                    new_pos  = out[t - 1, indices].copy()
+                    new_disp = np.zeros_like(new_disp)
                 frame[indices]    = new_pos
                 prev_disp[zone]   = new_disp
             out[t] = frame
@@ -180,13 +186,15 @@ class FeatureBlender:
         def on(idx: int) -> bool:
             return active_features is None or idx in active_features
 
-        target_vel_mean = float(feature_vec[_IDX_VEL_MEAN]) / FPS   # m/frame
-        target_vel_std  = float(feature_vec[_IDX_VEL_STD])  / FPS
-        target_acc_mean = float(feature_vec[_IDX_ACC_MEAN])  / (FPS * FPS)
-        target_rom      = float(feature_vec[_IDX_ROM])
-        target_freq     = float(feature_vec[_IDX_FREQ])
-        target_freq_mag = float(feature_vec[_IDX_FREQ_MAG])
-        target_pdist    = float(feature_vec[_IDX_PDIST])
+        target_vel_mean   = float(feature_vec[_IDX_VEL_MEAN])   / FPS   # m/frame
+        target_vel_std    = float(feature_vec[_IDX_VEL_STD])    / FPS
+        target_acc_mean   = float(feature_vec[_IDX_ACC_MEAN])   / (FPS * FPS)
+        target_rom        = float(feature_vec[_IDX_ROM])
+        target_freq       = float(feature_vec[_IDX_FREQ])
+        target_freq_mag   = float(feature_vec[_IDX_FREQ_MAG])
+        target_pdist      = float(feature_vec[_IDX_PDIST])
+        target_zone_speed = (float(feature_vec[_IDX_ZONE_SPEED]) / FPS
+                             if len(feature_vec) > _IDX_ZONE_SPEED else 0.0)
 
         # ---- 1. Velocity mean: scale displacement to match target speed ----
         orig_speeds     = np.linalg.norm(orig_disp_t, axis=-1)   # (k,)
@@ -249,6 +257,15 @@ class FeatureBlender:
             if cur_pdist > 1e-8:
                 pdist_scale   = np.clip(target_pdist / cur_pdist, 0.5, 2.0)
                 new_positions = centroid + offsets * pdist_scale
+
+        # ---- 8. Zone speed: scale centroid displacement to match target ----
+        # Complements vel_mean (per-joint) by acting on the zone as a rigid unit.
+        if on(_IDX_ZONE_SPEED) and target_zone_speed > 1e-8:
+            centroid_disp = orig_disp_t.mean(axis=0)           # (3,) zone bulk motion
+            cur_zone_speed = float(np.linalg.norm(centroid_disp))
+            if cur_zone_speed > 1e-6:
+                zone_scale    = np.clip(target_zone_speed / cur_zone_speed, 0.1, 5.0)
+                new_positions = J_prev + (new_positions - J_prev) * zone_scale
 
         new_disp = new_positions - J_prev
         return new_positions, new_disp
