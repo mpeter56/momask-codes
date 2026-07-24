@@ -2,7 +2,7 @@
 run_zone_blend.py — CLI entry point for the Phase 2 zone-aware blending pipeline.
 
 Loads MoMask models once, then runs the ZoneBlendPipeline for each job in a
-JSON jobs file (same format as edit_t2m_batch.py).
+JSON jobs file.
 
 Usage
 -----
@@ -12,7 +12,20 @@ Usage
         --zone_mode standard \\
         --gpu_id 0
 
-Jobs file format (same schema as edit_t2m_batch.py):
+Jobs file format — two supported variants:
+
+  Video input (bridge runs automatically if .npz not yet cached):
+    [
+      {
+        "ext":          "walk_001/walk_to_dance_q01",
+        "text_prompt":  "[walk:0.91] A person walks.",
+        "source_video": "video_bridge/inputs/walk_001.mp4",
+        "repeat_times": 1
+      },
+      ...
+    ]
+
+  Pre-extracted .npz input (bridge skipped):
     [
       {
         "ext":           "walk_001/walk_to_dance_q01",
@@ -23,6 +36,10 @@ Jobs file format (same schema as edit_t2m_batch.py):
       ...
     ]
 
+When "source_video" is provided, the bridge writes a .npz alongside the video
+(same stem, .npz extension) on first run and reuses it on subsequent runs.
+If both "source_video" and "source_motion" are given, "source_motion" wins.
+
 The source_motion .npz must contain either:
   - 'motion'  : (T, 263) HumanML3D motion vector  (preferred)
   - 'joints'  : (T, 22, 3) raw joint positions    (fallback)
@@ -31,8 +48,10 @@ The source_motion .npz must contain either:
 import argparse
 import json
 import os
+import sys
 import time
 from os.path import join as pjoin
+from pathlib import Path
 
 import numpy as np
 import torch
@@ -46,6 +65,36 @@ from utils.plot_script import plot_3d_motion
 from visualization.joints2bvh import Joint2BVHConvertor
 
 from semantic_spectrum.pipeline import ZoneBlendPipeline
+
+
+def run_video_bridge(video_path: str) -> str:
+    """
+    Run video_bridge/video_to_humanml3d.py on *video_path* if the cached .npz
+    does not already exist.  Returns the path to the .npz file.
+    """
+    video_path = Path(video_path).expanduser().resolve()
+    npz_path   = video_path.with_suffix(".npz")
+
+    if npz_path.exists():
+        print(f"  [bridge] reusing cached extraction: {npz_path}")
+        return str(npz_path)
+
+    bridge_script = Path(__file__).resolve().parent.parent / "video_bridge" / "video_to_humanml3d.py"
+    if not bridge_script.exists():
+        raise FileNotFoundError(f"video_bridge script not found at {bridge_script}")
+
+    print(f"  [bridge] extracting pose from {video_path.name} ...")
+    cmd = [
+        sys.executable, str(bridge_script),
+        "--video",  str(video_path),
+        "--output", str(npz_path),
+    ]
+    import subprocess
+    result = subprocess.run(cmd, check=True)
+    if not npz_path.exists():
+        raise RuntimeError(f"Bridge completed but output not found: {npz_path}")
+    print(f"  [bridge] saved to {npz_path}")
+    return str(npz_path)
 
 
 def parse_args():
@@ -187,7 +236,6 @@ def main():
         torch.cuda.empty_cache()
         ext         = job['ext']
         text_prompt = job['text_prompt']
-        src_path    = job['source_motion']
 
         print(f"\n[{i+1}/{len(jobs)}] {ext}")
         print(f"  prompt : {text_prompt}")
@@ -199,6 +247,17 @@ def main():
         os.makedirs(animation_dir, exist_ok=True)
 
         t_job = time.time()
+
+        # Resolve source: video → bridge → .npz, or use pre-extracted .npz directly
+        src_path = job.get('source_motion')
+        if not src_path:
+            src_video = job.get('source_video')
+            if not src_video:
+                raise ValueError(
+                    f"Job '{ext}' must have 'source_motion' or 'source_video'."
+                )
+            src_path = run_video_bridge(src_video)
+
         motion_vec, orig_joints = load_source(src_path)
 
         if motion_vec is not None:
