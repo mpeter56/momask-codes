@@ -121,6 +121,9 @@ def parse_args():
     p.add_argument('--cond_scale', type=float, default=4.0)
     p.add_argument('--temperature',type=float, default=1.0)
     p.add_argument('--topkr',      type=float, default=0.9)
+    p.add_argument('--tour',       action='store_true', default=False,
+                   help='After all jobs complete, render a spectrum tour video '
+                        'cycling through the blended outputs of every job.')
     p.add_argument('--ablate',     action='store_true', default=False,
                    help='Run once per feature dimension and save a named output '
                         'for each. Produces 7 extra output variants alongside '
@@ -295,6 +298,21 @@ def main():
         save_variant('momask',  momask_joints)
         save_variant('blended', output_joints)
 
+        # DTW identity metric: blended vs source
+        dtw_dir = pjoin(result_dir, 'dtw')
+        try:
+            from scripts.similarity_align import run_alignment
+            print(f"  [dtw] measuring identity retention ...")
+            summary = run_alignment(
+                original=pjoin(joints_dir, 'source.npy'),
+                generated=pjoin(joints_dir, 'blended.npy'),
+                output_dir=dtw_dir,
+            )
+            print(f"  [dtw] avg_per_pair={summary['avg_per_pair']:.3f}  "
+                  f"(lower = more identity preserved)")
+        except Exception as e:
+            print(f"  [dtw] skipped: {e}")
+
         # Ablation: one output per feature dimension
         if args.ablate:
             from semantic_spectrum.blend import FEATURE_NAMES
@@ -311,6 +329,28 @@ def main():
 
     total = time.time() - t0
     print(f"\nAll {len(jobs)} jobs done in {total:.1f}s ({total/len(jobs):.1f}s/job)")
+
+    if args.tour:
+        import subprocess
+        blended_npys = []
+        for job in jobs:
+            ext = job['ext']
+            p   = pjoin(args.out_dir, ext, 'joints', 'blended.npy')
+            if os.path.exists(p):
+                blended_npys.append(p)
+        if blended_npys:
+            tour_out = pjoin(args.out_dir, 'spectrum_tour.mp4')
+            labels   = ','.join(job['ext'].split('/')[-1] for job in jobs
+                                if os.path.exists(pjoin(args.out_dir, job['ext'], 'joints', 'blended.npy')))
+            print(f"\n[tour] rendering spectrum tour → {tour_out}")
+            subprocess.run([
+                sys.executable, 'scripts/render_spectrum_tour.py',
+                '--files',  ','.join(blended_npys),
+                '--labels', labels,
+                '--out',    tour_out,
+            ], check=True)
+        else:
+            print("[tour] no blended outputs found, skipping tour.")
 
 
 if __name__ == '__main__':
