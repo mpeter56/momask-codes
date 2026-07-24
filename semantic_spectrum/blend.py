@@ -39,6 +39,17 @@ _IDX_FREQ     = 4
 _IDX_FREQ_MAG = 5
 _IDX_PDIST    = 6
 
+# Human-readable names for ablation outputs
+FEATURE_NAMES = [
+    "vel_mean",
+    "vel_std",
+    "acc_mean",
+    "rom",
+    "dom_freq",
+    "freq_mag",
+    "pairwise_dist",
+]
+
 
 class FeatureBlender:
     """
@@ -83,12 +94,19 @@ class FeatureBlender:
         self,
         M_output:        dict[str, np.ndarray],
         original_joints: np.ndarray,
+        active_features: set[int] | None = None,
     ) -> np.ndarray:
         """
         Step 2: autoregressively build the output joint sequence.
 
         J_out(0) = J_original(0)  — seed from performer's starting pose.
         J_out(t) = J_out(t-1) ⊛ M'_orig,i  for t = 1 … T-1
+
+        Parameters
+        ----------
+        active_features : set of feature indices to apply. If None, all 7 are
+                          used. Pass a single-element set (e.g. {0}) to isolate
+                          one feature for ablation.
 
         Per-zone state is carried across frames:
           - prev_disp   : previous output displacement (for acc smoothing)
@@ -128,6 +146,7 @@ class FeatureBlender:
                     t=t,
                     prev_disp=prev_disp[zone],
                     zone_origin=zone_origin[zone],
+                    active_features=active_features,
                 )
                 frame[indices]    = new_pos
                 prev_disp[zone]   = new_disp
@@ -141,12 +160,13 @@ class FeatureBlender:
 
     def _apply_motion_vec(
         self,
-        J_prev:      np.ndarray,   # (k, 3) joints at t-1
-        orig_disp_t: np.ndarray,   # (k, 3) original displacement at frame t
-        feature_vec: np.ndarray,   # (7,)   updated feature vector for this zone
-        t:           int,          # current frame index
-        prev_disp:   np.ndarray,   # (k, 3) output displacement at t-1
-        zone_origin: np.ndarray,   # (k, 3) zone joint positions at t=0
+        J_prev:          np.ndarray,          # (k, 3) joints at t-1
+        orig_disp_t:     np.ndarray,          # (k, 3) original displacement at frame t
+        feature_vec:     np.ndarray,          # (7,)   updated feature vector for this zone
+        t:               int,                 # current frame index
+        prev_disp:       np.ndarray,          # (k, 3) output displacement at t-1
+        zone_origin:     np.ndarray,          # (k, 3) zone joint positions at t=0
+        active_features: set[int] | None = None,
     ) -> tuple[np.ndarray, np.ndarray]:
         """
         Apply all seven feature dimensions to advance zone joints by one frame.
@@ -156,6 +176,10 @@ class FeatureBlender:
         new_positions : (k, 3)
         new_disp      : (k, 3)  — stored as prev_disp for the next frame
         """
+        # Helper: is this feature active in the current ablation run?
+        def on(idx: int) -> bool:
+            return active_features is None or idx in active_features
+
         target_vel_mean = float(feature_vec[_IDX_VEL_MEAN]) / FPS   # m/frame
         target_vel_std  = float(feature_vec[_IDX_VEL_STD])  / FPS
         target_acc_mean = float(feature_vec[_IDX_ACC_MEAN])  / (FPS * FPS)
@@ -168,53 +192,45 @@ class FeatureBlender:
         orig_speeds     = np.linalg.norm(orig_disp_t, axis=-1)   # (k,)
         mean_orig_speed = float(orig_speeds.mean())
 
-        if mean_orig_speed < 1e-6:
-            disp = orig_disp_t.copy()
-        else:
+        if on(_IDX_VEL_MEAN) and mean_orig_speed > 1e-6:
             disp = orig_disp_t * (target_vel_mean / mean_orig_speed)
+        else:
+            disp = orig_disp_t.copy()
 
         # ---- 2. Velocity std: spread per-joint speeds around the mean ----
-        if target_vel_std > 1e-8 and mean_orig_speed > 1e-6:
-            joint_speeds = np.linalg.norm(disp, axis=-1)          # (k,)
+        if on(_IDX_VEL_STD) and target_vel_std > 1e-8 and mean_orig_speed > 1e-6:
+            joint_speeds = np.linalg.norm(disp, axis=-1)
             cur_std      = float(joint_speeds.std())
             cur_mean     = float(joint_speeds.mean())
             if cur_std > 1e-8 and cur_mean > 1e-8:
-                # Rescale deviations from the mean to match target_vel_std
-                std_ratio    = np.clip(target_vel_std / cur_std, 0.1, 10.0)
-                scale_per_j  = 1.0 + (joint_speeds - cur_mean) / cur_mean * (std_ratio - 1.0)
-                scale_per_j  = np.clip(scale_per_j, 0.1, 10.0)
-                disp         = disp * scale_per_j[:, None]
+                std_ratio   = np.clip(target_vel_std / cur_std, 0.1, 10.0)
+                scale_per_j = 1.0 + (joint_speeds - cur_mean) / cur_mean * (std_ratio - 1.0)
+                scale_per_j = np.clip(scale_per_j, 0.1, 10.0)
+                disp        = disp * scale_per_j[:, None]
 
         # ---- 3. Acceleration: smooth transitions between frames ----
-        # acc_mean in m/s² → max allowed change per frame in m/frame
-        # High acc_mean = allow large velocity changes (snappy)
-        # Low  acc_mean = clamp velocity changes   (smooth)
-        if target_acc_mean > 1e-8 and np.linalg.norm(prev_disp) > 1e-6:
-            delta      = disp - prev_disp                         # (k, 3)
-            delta_mag  = np.linalg.norm(delta, axis=-1, keepdims=True)   # (k,1)
-            max_change = target_acc_mean                          # m/frame² already
-            too_large  = (delta_mag > max_change).squeeze(-1)
+        if on(_IDX_ACC_MEAN) and target_acc_mean > 1e-8 and np.linalg.norm(prev_disp) > 1e-6:
+            delta      = disp - prev_disp
+            delta_mag  = np.linalg.norm(delta, axis=-1, keepdims=True)
+            too_large  = (delta_mag > target_acc_mean).squeeze(-1)
             if too_large.any():
-                clamped         = prev_disp + delta / (delta_mag + 1e-8) * max_change
+                clamped         = prev_disp + delta / (delta_mag + 1e-8) * target_acc_mean
                 disp[too_large] = clamped[too_large]
 
         # ---- 4 & 5. Frequency + magnitude: sinusoidal oscillation ----
-        # Adds a sinusoidal component at the target dominant frequency,
-        # scaled by freq_mag and the current mean speed.
-        if target_freq > 1e-4 and target_freq_mag > 1e-4:
-            osc_amplitude = target_freq_mag * target_vel_mean     # m/frame
+        if on(_IDX_FREQ) and on(_IDX_FREQ_MAG) and target_freq > 1e-4 and target_freq_mag > 1e-4:
+            osc_amplitude = target_freq_mag * target_vel_mean
             osc_value     = osc_amplitude * np.sin(2.0 * np.pi * target_freq * t / FPS)
-            centroid_disp = disp.mean(axis=0)                     # (3,)
+            centroid_disp = disp.mean(axis=0)
             centroid_norm = float(np.linalg.norm(centroid_disp))
             if centroid_norm > 1e-8:
-                osc_dir = centroid_disp / centroid_norm
-                disp    = disp + osc_value * osc_dir
+                disp = disp + osc_value * (centroid_disp / centroid_norm)
 
         # Advance positions
         new_positions = J_prev + disp
 
         # ---- 6. ROM: clamp zone centroid drift from its t=0 position ----
-        if target_rom > 1e-6:
+        if on(_IDX_ROM) and target_rom > 1e-6:
             centroid_new    = new_positions.mean(axis=0)
             centroid_origin = zone_origin.mean(axis=0)
             drift           = float(np.linalg.norm(centroid_new - centroid_origin))
@@ -223,14 +239,13 @@ class FeatureBlender:
                 new_positions = new_positions - pull
 
         # ---- 7. Pairwise distance: scale inter-joint spread ----
-        if target_pdist > 1e-6 and J_prev.shape[0] >= 2:
-            centroid      = new_positions.mean(axis=0)
-            offsets       = new_positions - centroid
-            # Compute current mean pairwise distance (vectorised)
-            diff_mat      = new_positions[:, None, :] - new_positions[None, :, :]   # (k,k,3)
-            dist_mat      = np.linalg.norm(diff_mat, axis=-1)                       # (k,k)
-            k             = new_positions.shape[0]
-            cur_pdist     = float(dist_mat.sum()) / (k * (k - 1) + 1e-8)
+        if on(_IDX_PDIST) and target_pdist > 1e-6 and J_prev.shape[0] >= 2:
+            centroid  = new_positions.mean(axis=0)
+            offsets   = new_positions - centroid
+            diff_mat  = new_positions[:, None, :] - new_positions[None, :, :]
+            dist_mat  = np.linalg.norm(diff_mat, axis=-1)
+            k         = new_positions.shape[0]
+            cur_pdist = float(dist_mat.sum()) / (k * (k - 1) + 1e-8)
             if cur_pdist > 1e-8:
                 pdist_scale   = np.clip(target_pdist / cur_pdist, 0.5, 2.0)
                 new_positions = centroid + offsets * pdist_scale

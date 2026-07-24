@@ -124,7 +124,7 @@ class ZoneBlendPipeline:
         output_joints = self.blender.reconstruct(M_output, original_joints)
 
         if return_intermediates:
-            return original_joints, momask_joints, output_joints
+            return original_joints, momask_joints, output_joints, M_output
         return output_joints
 
     # ------------------------------------------------------------------
@@ -292,5 +292,5 @@ class ZoneBlendPipeline:
         output_joints = self.blender.reconstruct(M_output, original_joints)
 
         if return_intermediates:
-            return original_joints, momask_joints, output_joints
+            return original_joints, momask_joints, output_joints, M_output
         return output_joints

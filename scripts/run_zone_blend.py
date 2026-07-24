@@ -121,7 +121,14 @@ def parse_args():
     p.add_argument('--cond_scale', type=float, default=4.0)
     p.add_argument('--temperature',type=float, default=1.0)
     p.add_argument('--topkr',      type=float, default=0.9)
-    p.add_argument('--skip_ik',    action='store_true')
+    p.add_argument('--ablate',     action='store_true', default=False,
+                   help='Run once per feature dimension and save a named output '
+                        'for each. Produces 7 extra output variants alongside '
+                        'the normal blended output.')
+    p.add_argument('--ik',         action='store_true', default=False,
+                   help='Run foot IK pass on outputs. Off by default — '
+                        'foot IK requires a calibrated ground plane and will '
+                        'collapse the skeleton on video-bridge input.')
     p.add_argument('--out_dir',    default='./blend_outputs',
                    help='Root output directory. Default: ./blend_outputs')
     return p.parse_args()
@@ -264,10 +271,10 @@ def main():
         motion_vec, orig_joints = load_source(src_path)
 
         if motion_vec is not None:
-            source_joints, momask_joints, output_joints = pipeline.run_from_motion_vec(
+            source_joints, momask_joints, output_joints, M_output = pipeline.run_from_motion_vec(
                 motion_vec, orig_joints, text_prompt, return_intermediates=True)
         else:
-            source_joints, momask_joints, output_joints = pipeline.run(
+            source_joints, momask_joints, output_joints, M_output = pipeline.run(
                 orig_joints, text_prompt, return_intermediates=True)
 
         T = len(output_joints)
@@ -278,7 +285,7 @@ def main():
             _, sj = converter.convert(joints, filename=bvh, iterations=100, foot_ik=False)
             plot_3d_motion(pjoin(animation_dir, f'{tag}_len{T}.mp4'),
                            t2m_kinematic_chain, sj, title=tag, fps=20)
-            if not args.skip_ik:
+            if args.ik:
                 bvh_ik = pjoin(animation_dir, f'{tag}_len{T}_ik.bvh')
                 _, ij = converter.convert(joints, filename=bvh_ik, iterations=100, foot_ik=True)
                 plot_3d_motion(pjoin(animation_dir, f'{tag}_len{T}_ik.mp4'),
@@ -287,6 +294,18 @@ def main():
         save_variant('source',  source_joints)
         save_variant('momask',  momask_joints)
         save_variant('blended', output_joints)
+
+        # Ablation: one output per feature dimension
+        if args.ablate:
+            from semantic_spectrum.blend import FEATURE_NAMES
+            print(f"  [ablate] running {len(FEATURE_NAMES)} single-feature passes ...")
+            for feat_idx, feat_name in enumerate(FEATURE_NAMES):
+                ablation_joints = pipeline.blender.reconstruct(
+                    M_output, source_joints, active_features={feat_idx}
+                )
+                tag = f'ablate_{feat_idx:02d}_{feat_name}'
+                save_variant(tag, ablation_joints)
+                print(f"    [{feat_idx}] {feat_name} done")
 
         print(f"  done in {time.time() - t_job:.1f}s → {result_dir}")
 
