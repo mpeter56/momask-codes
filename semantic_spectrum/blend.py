@@ -11,7 +11,7 @@ Step 2  — Autoregressive reconstruction (per frame t = 1 … T):
     J_out(t) = J_out(t-1) ⊛ M'_orig,i
     J_out(0) = J_original(0)
 
-The ⊛ operator applies all seven feature dimensions:
+The ⊛ operator applies all nine feature dimensions:
 
   [0] vel_mean   — scale displacement so mean zone speed matches target
   [1] vel_std    — spread per-joint speeds around the mean by target std
@@ -20,6 +20,8 @@ The ⊛ operator applies all seven feature dimensions:
   [4] dom_freq   — add sinusoidal oscillation at target frequency
   [5] freq_mag   — amplitude of the sinusoidal modulation
   [6] pairwise   — scale inter-joint spread around zone centroid
+  [7] zone_speed — scale the zone centroid displacement (rigid-body translation)
+  [8] orientation — yaw the zone about vertical to match a target turn rate (the Space axis)
 """
 
 from __future__ import annotations
@@ -39,6 +41,7 @@ _IDX_FREQ      = 4
 _IDX_FREQ_MAG  = 5
 _IDX_PDIST     = 6
 _IDX_ZONE_SPEED = 7   # centroid displacement magnitude (zone-level speed)
+_IDX_ORIENT     = 8   # yaw/turn rate about vertical (the Space axis)
 
 # Human-readable names for ablation outputs
 FEATURE_NAMES = [
@@ -50,13 +53,14 @@ FEATURE_NAMES = [
     "freq_mag",
     "pairwise_dist",
     "zone_speed",
+    "orientation",
 ]
 
 
 class FeatureBlender:
     """
     Blend original and MoMask feature vectors, then reconstruct the output
-    joint sequence autoregressively using all seven kinematic feature dimensions.
+    joint sequence autoregressively using all nine kinematic feature dimensions.
     """
 
     def __init__(self, alpha: float = 0.5, zone_mode: str = "standard"):
@@ -106,7 +110,7 @@ class FeatureBlender:
 
         Parameters
         ----------
-        active_features : set of feature indices to apply. If None, all 7 are
+        active_features : set of feature indices to apply. If None, all are
                           used. Pass a single-element set (e.g. {0}) to isolate
                           one feature for ablation.
 
@@ -175,7 +179,7 @@ class FeatureBlender:
         active_features: set[int] | None = None,
     ) -> tuple[np.ndarray, np.ndarray]:
         """
-        Apply all seven feature dimensions to advance zone joints by one frame.
+        Apply all nine feature dimensions to advance zone joints by one frame.
 
         Returns
         -------
@@ -195,6 +199,8 @@ class FeatureBlender:
         target_pdist      = float(feature_vec[_IDX_PDIST])
         target_zone_speed = (float(feature_vec[_IDX_ZONE_SPEED]) / FPS
                              if len(feature_vec) > _IDX_ZONE_SPEED else 0.0)
+        target_orient     = (float(feature_vec[_IDX_ORIENT])
+                             if len(feature_vec) > _IDX_ORIENT else 0.0)   # rad/s
 
         # ---- 1. Velocity mean: scale displacement to match target speed ----
         orig_speeds     = np.linalg.norm(orig_disp_t, axis=-1)   # (k,)
@@ -266,6 +272,22 @@ class FeatureBlender:
             if cur_zone_speed > 1e-6:
                 zone_scale    = np.clip(target_zone_speed / cur_zone_speed, 0.1, 5.0)
                 new_positions = J_prev + (new_positions - J_prev) * zone_scale
+
+        # ---- 9. Orientation: yaw the zone about vertical to match target turn rate ----
+        # The Space axis: accumulate rotation about the zone centroid at target_orient rad/s.
+        # Turn direction follows the zone's original rotation this frame (default +).
+        if on(_IDX_ORIENT) and target_orient > 1e-6 and J_prev.shape[0] >= 2:
+            r0     = J_prev - J_prev.mean(axis=0)
+            omega0 = float(np.mean((r0[:, 0] * orig_disp_t[:, 2] - r0[:, 2] * orig_disp_t[:, 0])
+                                   / (r0[:, 0] ** 2 + r0[:, 2] ** 2 + 1e-8)))
+            sign   = 1.0 if omega0 >= 0.0 else -1.0
+            dtheta = sign * target_orient / FPS          # radians this frame
+            ca, sa = np.cos(dtheta), np.sin(dtheta)
+            c      = new_positions.mean(axis=0)
+            rel    = new_positions - c
+            xr     =  rel[:, 0] * ca + rel[:, 2] * sa
+            zr     = -rel[:, 0] * sa + rel[:, 2] * ca
+            new_positions = c + np.stack([xr, rel[:, 1], zr], axis=-1)
 
         new_disp = new_positions - J_prev
         return new_positions, new_disp

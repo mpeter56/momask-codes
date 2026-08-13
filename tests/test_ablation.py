@@ -29,6 +29,7 @@ from semantic_spectrum.blend import (
     _IDX_FREQ_MAG,
     _IDX_PDIST,
     _IDX_ZONE_SPEED,
+    _IDX_ORIENT,
     FPS,
 )
 from semantic_spectrum.zone_features import ZoneFeatureExtractor, FEATURE_DIM
@@ -89,19 +90,20 @@ def _walking_motion(T: int = 80) -> np.ndarray:
 
 def _make_feature_vec(overrides: dict[int, float] | None = None) -> np.ndarray:
     """
-    Build a neutral 8-element feature vector and apply any per-index overrides.
+    Build a neutral 9-element feature vector and apply any per-index overrides.
     Neutral values are close to a slow walking motion; each test sets the target
     dimension to something distinctly different from source to confirm an effect.
     """
     fv = np.array([
-        1.0,    # [0] vel_mean   m/s
-        0.3,    # [1] vel_std    m/s
-        2.0,    # [2] acc_mean   m/s^2
-        0.5,    # [3] rom        m
-        1.0,    # [4] dom_freq   Hz
-        0.3,    # [5] freq_mag   (normalised)
-        0.15,   # [6] pairwise   m
-        0.5,    # [7] zone_speed m/s
+        1.0,    # [0] vel_mean    m/s
+        0.3,    # [1] vel_std     m/s
+        2.0,    # [2] acc_mean    m/s^2
+        0.5,    # [3] rom         m
+        1.0,    # [4] dom_freq    Hz
+        0.3,    # [5] freq_mag    (normalised)
+        0.15,   # [6] pairwise    m
+        0.5,    # [7] zone_speed  m/s
+        0.5,    # [8] orientation rad/s
     ], dtype=np.float32)
     for idx, val in (overrides or {}).items():
         fv[idx] = val
@@ -139,13 +141,16 @@ def _centroid_speed(joints: np.ndarray, zone_indices: list[int]) -> np.ndarray:
 
 class TestSanity:
     def test_feature_dim(self):
-        assert FEATURE_DIM == 8
+        assert FEATURE_DIM == 9
 
     def test_feature_names_length(self):
-        assert len(FEATURE_NAMES) == 8
+        assert len(FEATURE_NAMES) == 9
 
-    def test_feature_names_last_is_zone_speed(self):
+    def test_feature_names_zone_speed(self):
         assert FEATURE_NAMES[_IDX_ZONE_SPEED] == "zone_speed"
+
+    def test_feature_names_last_is_orientation(self):
+        assert FEATURE_NAMES[_IDX_ORIENT] == "orientation"
 
     def test_extractor_output_shape(self):
         joints = _walking_motion()
@@ -401,6 +406,44 @@ class TestAblateZoneSpeed:
         assert _mean_displacement(source, out) > 1e-4
 
 
+class TestAblateOrientation:
+    """[8] orientation — yaws the zone about vertical to match a target turn rate (Space axis)."""
+
+    @staticmethod
+    def _zone_turn_rate(joints: np.ndarray, zone_indices: list[int]) -> float:
+        """Mean absolute yaw rate (rad/s) of a zone about vertical, matching the extractor."""
+        js  = joints[:, zone_indices, :]
+        rel = (js - js.mean(axis=1, keepdims=True))[:-1]
+        vel = np.diff(js, axis=0) * FPS
+        rx, rz = rel[..., 0], rel[..., 2]
+        vx, vz = vel[..., 0], vel[..., 2]
+        omega  = (rx * vz - rz * vx) / (rx * rx + rz * rz + 1e-8)
+        return float(np.mean(np.abs(omega.mean(axis=1))))
+
+    def test_high_orientation_increases_turn_rate(self):
+        blender = _blender()
+        source  = _walking_motion()
+        fv_high = _make_feature_vec({_IDX_ORIENT: 4.0})
+        fv_low  = _make_feature_vec({_IDX_ORIENT: 0.05})
+        out_high = blender.reconstruct(_m_output(blender, fv_high), source, active_features={_IDX_ORIENT})
+        out_low  = blender.reconstruct(_m_output(blender, fv_low),  source, active_features={_IDX_ORIENT})
+
+        arm_idx = [13, 14, 16, 17, 18, 19]
+        rate_high = self._zone_turn_rate(out_high, arm_idx)
+        rate_low  = self._zone_turn_rate(out_low,  arm_idx)
+        assert rate_high > rate_low, (
+            f"high orientation target should yield a higher turn rate "
+            f"({rate_high:.4f} vs {rate_low:.4f})"
+        )
+
+    def test_orientation_changes_output_from_source(self):
+        blender = _blender()
+        source  = _walking_motion()
+        fv      = _make_feature_vec({_IDX_ORIENT: 4.0})
+        out     = blender.reconstruct(_m_output(blender, fv), source, active_features={_IDX_ORIENT})
+        assert _mean_displacement(source, out) > 1e-4
+
+
 # ---------------------------------------------------------------------------
 # Cross-feature isolation: inactive features should not change output
 # ---------------------------------------------------------------------------
@@ -422,6 +465,7 @@ class TestFeatureIsolation:
         ({_IDX_FREQ, _IDX_FREQ_MAG}, {_IDX_FREQ: 3.0, _IDX_FREQ_MAG: 0.9}),
         ({_IDX_PDIST},      {_IDX_PDIST:     1.0}),
         ({_IDX_ZONE_SPEED}, {_IDX_ZONE_SPEED: 2.0}),
+        ({_IDX_ORIENT},     {_IDX_ORIENT:    3.0}),
     ]
 
     @pytest.mark.parametrize("active_set,overrides", _SOLO_FEATURES)
